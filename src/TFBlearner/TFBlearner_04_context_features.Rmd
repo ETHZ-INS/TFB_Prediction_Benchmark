@@ -1,0 +1,44 @@
+---
+title: "Context-Features TFBlearner"
+output: html_document
+date: "2025-03-13"
+params: 
+  outPath: "mae_context"
+  outDir: "data/02_TFBlearner_object"
+  maePath: "02_mae_site.rds"
+  seed: 43
+  threads: 16
+---
+
+
+```{r setup, include=FALSE, error=TRUE}
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(EnsDb.Hsapiens.v86)
+library(phastCons100way.UCSC.hg38)
+library(parallel)
+library(TFBlearner)
+library(data.table)
+library(GenomicRanges)
+library(BiocParallel)
+
+seed <- params$seed
+set.seed(seed)
+
+setDTthreads(as.integer(params$threads))
+```
+
+# Add Context-Features
+
+## Load MultiAssayExperiment Object
+
+```{r, context-features - basic object}
+mae <- readRDS(params$maePath)
+outDir <- params$outDir
+mae <- panContextFeatures(mae, seed=seed, saveHdf5=TRUE, 
+                          outDir=file.path("..", outDir))
+saveRDS(mae, file.path("..", params$outPath))
+```
+
+```{r, session info}
+sessionInfo()
+```

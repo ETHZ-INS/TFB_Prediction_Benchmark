@@ -1,0 +1,29 @@
+---
+title: "Convert Motif Format"
+output: html_document
+date: "2025-09-13"
+params: 
+  outDir: "data/Motifs"
+  motifModelsPath: "combinations.tsv"
+  threads: 16
+---
+
+```{r setup}
+library(data.table)
+library(universalmotif)
+```
+
+```{r, convert motifs}
+args <- commandArgs(trailingOnly=TRUE)
+motifModels <- readRDS(file.path("../..", params$motifModelsPath))
+outDir <- file.path("../..", params$outDir)
+
+for(tf in names(motifModels)){
+  outPath <- file.path(outDir, paste0(tf, ".jaspar"))
+  write_jaspar(motifModels[[tf]], file=outPath, overwrite=TRUE) 
+}
+```
+
+```{r, sessionInfo}
+sessionInfo()
+```

@@ -1,0 +1,186 @@
+---
+title: "01 Merging Replicate Peaks"
+output: html_document
+date: "2025-03-04"
+params: 
+  raw_dir_peaks: "data/common/raw_chip_peaks"
+  out_dir_merged_peaks: "data/common/merged_chip_peaks"
+  meta_peaks_path: "data/common/encode_chip_peak_ids.tsv"
+  downloaded_peaks_list_path: "data/common/downloaded_raw_chip_peaks.tsv"
+  lift_chain_path: "data/annotation/hg19ToHg38.over.chain"
+  stats_out_path: "output/preprocessing/allPeakStats.rds"
+---
+
+```{r setup}
+library(data.table)
+library(GenomicRanges)
+library(ggplot2)
+library(rtracklayer)
+source("consensusPeaks.R")
+
+Sys.setenv(CLI_TICK_THREAD = "false")
+```
+
+# Meta-data
+
+```{r}
+# TODO: clean-this via arguments
+outDir <- file.path("../..", params$out_dir_merged_peaks)
+liftChainPath <- params$lift_chain_path
+rawDirPeaks <- file.path("../..", params$raw_dir_peaks)
+statsOutPath <- file.path("../..", params$stats_out_path)
+
+if(!dir.exists(outDir)){
+  dir.create(outDir, recursive=TRUE)}
+
+metaChIP <- fread(file.path("../..", params$meta_peaks_path))
+downloadedFiles <- fread(file.path("../..", params$downloaded_peaks_list_path), 
+                         header=FALSE)
+metaChIP <- subset(metaChIP, href %in% downloadedFiles$V1)
+metaChIP[,combination_id:=paste(TF, CellularContext, sep="_")]
+```
+
+# Merge peaks
+
+```{r, error=TRUE}
+allPeakStats <- data.table()
+for(comb in unique(metaChIP$combination_id)){
+  
+  metaChIPSub <- subset(metaChIP, combination_id==comb)
+  
+  # do liftover for Jurkat data
+  if(unique(metaChIPSub$CellularContext)=="Jurkat"){
+    ch = import.chain(file.path("../..", liftChainPath))
+    peakPaths <- file.path(rawDirPeaks, 
+                           paste0(metaChIPSub$accession, ".bed.gz"))
+    peaks <- lapply(peakPaths, fread, 
+                    col.names=c("chr", "start", "end",  "signal"), 
+                    select=c(1:3,9))
+    peaks <- rbindlist(peaks)
+    peaks <- peaks[,.(signal=max(signal)), by=c("chr", "start", "end")]
+    peaksRanges <- makeGRangesFromDataFrame(as.data.frame(peaks), 
+                                            keep.extra.columns=TRUE)
+    seqlevelsStyle(peaksRanges) = "UCSC"
+    peaksLiftOver <- liftOver(peaksRanges, ch)
+    peaksLiftOver <- lapply(1:length(peaksLiftOver), function(i) {
+      p <- peaksLiftOver[[i]]
+      if(length(p)>0) p$ind <- i
+      p})
+    peaksLiftOver <- lapply(peaksLiftOver, as.data.table)
+    mp <- rbindlist(peaksLiftOver, fill=TRUE)
+    mp[,signal:=fifelse(is.na(signal), 0, signal)]
+    setnames(mp, "signal", "qValue")
+    mp$type <- "lifted (Jurkat)"
+    mp <- subset(mp, seqnames %in% paste0("chr", 1:22))
+    write.table(mp[,c("seqnames", "start", "end"), with=FALSE], 
+                file=file.path(outDir,
+                               paste0("merged_peaks_", comb, ".bed")), 
+                row.names=FALSE, quote=FALSE, sep="\t", col.names=FALSE)
+    
+    write.table(mp[,c("seqnames", "start", "end", "qValue"), with=FALSE], 
+                file=file.path(outDir,
+                               paste0("merged_peaks_signal_", comb, ".bed")), 
+                row.names=FALSE, quote=FALSE, sep="\t", col.names=FALSE)
+    
+    write.table(mp[,c("seqnames", "start", "end"), with=FALSE], 
+                file=file.path(outDir,
+                               paste0("nonCons_peaks_", comb, ".bed")), 
+                row.names=FALSE, quote=FALSE, sep="\t", col.names=FALSE)
+    
+    mp[,width:=end-start+1]
+    peakStats <- data.table(width=mp$width, origin=mp$type)
+    peakStats[,type:=origin]
+  }
+  else{
+    # merge across experiments
+    consPeaks <- subset(metaChIPSub, peak_type=="conservative")
+    if(nrow(consPeaks)>0){
+      consPeakPaths <- file.path(rawDirPeaks, 
+                                 paste0(consPeaks$accession, ".bed.gz"))
+      consPeakPaths <- as.list(consPeakPaths)
+      names(consPeakPaths) <- consPeaks$Exp_Accession
+      consPeakStats <- lapply(consPeakPaths, function(p){
+          pDt <- fread(p)
+          pDt[,width:=V3-V2]
+          statDt <- data.table(width=pDt$width, file_name=basename(p))})
+      names(consPeakStats) <- names(consPeakPaths)
+      consPeakStats <- rbindlist(consPeakStats, idcol="Exp_Accession")
+      consPeakStats$type <- "conservative IDR thresholded"
+    }
+    else{
+      consPeakStats <- NULL
+    }
+    
+    libPeaks <- subset(metaChIPSub, peak_type=="liberal")
+    
+    if(nrow(libPeaks)>0){
+      libPeakPaths <- file.path(rawDirPeaks, 
+                                paste0(libPeaks$accession, ".bed.gz"))
+      libPeakPaths <- as.list(libPeakPaths)
+      names(libPeakPaths) <- libPeaks$Exp_Accession
+      libPeakStats <- lapply(libPeakPaths, function(p){
+          pDt <- fread(p)
+          pDt[,width:=V3-V2]
+          statDt <- data.table(width=pDt$width, file_name=basename(p))})
+      names(libPeakStats) <- names(libPeakPaths)
+      libPeakStats <- rbindlist(libPeakStats, idcol="Exp_Accession")
+      libPeakStats$type <- "IDR thresholded"
+    }
+    else{
+      libPeakStats <- NULL
+    }
+      
+    mp <- consensusPeaks(consPeakPaths, libPeakPaths)
+    mp <- as.data.table(granges(mp, use.mcols=TRUE))
+    
+    # Needed for Catchitt
+    if(length(libPeakPaths)>0){
+      lp <- lapply(libPeakPaths, fread, select=1:3, 
+                   col.names=c("seqnames","start", "end"))
+      lp <- rbindlist(lp, use.names=TRUE, fill=TRUE)
+      lp <- subset(lp, seqnames %in% paste0("chr", 1:22))
+      write.table(lp[,c("seqnames", "start", "end"), with=FALSE], 
+                file=file.path(outDir,
+                               paste0("nonCons_peaks_", comb, ".bed")), 
+                row.names=FALSE, quote=FALSE, sep="\t", col.names=FALSE)
+    }
+  
+    mp <- subset(mp, seqnames %in% paste0("chr", 1:22))
+    write.table(mp[,c("seqnames", "start", "end"), with=FALSE], 
+                file=file.path(outDir,
+                               paste0("merged_peaks_", comb, ".bed")), 
+                row.names=FALSE, quote=FALSE, sep="\t", col.names=FALSE)
+    
+    write.table(mp[,c("seqnames", "start", "end", "qValue"), with=FALSE], 
+                file=file.path(outDir,
+                               paste0("merged_peaks_signal_", comb, ".bed")), 
+                row.names=FALSE, quote=FALSE, sep="\t", col.names=FALSE)
+    mp[,width:=end-start+1]
+    mergedPeakStats <- data.table(width=mp$width, origin=mp$type)
+    mergedPeakStats$type <- "merged"
+    
+    # return peak widths
+    peakStats <- rbindlist(list(libPeakStats, consPeakStats, mergedPeakStats), 
+                           fill=TRUE)
+    peakStats$combination_id <- comb
+  }
+  allPeakStats <- rbind(allPeakStats, peakStats, fill=TRUE)
+  gc()
+}
+
+saveRDS(allPeakStats, statsOutPath)
+```
+
+# Consensus peak widths
+
+```{r}
+ggplot(allPeakStats, aes(x=width,color=type))+
+  geom_density()+
+  facet_grid(rows=vars(type))+
+  theme_bw()
+table(allPeakStats$type)
+```
+
+```{r}
+sessionInfo()
+```

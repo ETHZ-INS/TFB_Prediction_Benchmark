@@ -1,0 +1,19 @@
+project: TF Binding Prediction Benchmark
+
+methods:
+  - BMO
+  - Catchitt
+  - maxATAC
+  - TFBlearner
+  - TFBlearner.addSupport
+  - TOP
+  
+seed: 43
+# either train or test, if train, all test data is removed an two training cellular contexts (HepG2 and MCF-7 are heldout)
+holdout: test
+
+# if null all preregistered TFs are used
+subset_tfs: 
+
+# Needs to be define if TOP is used
+bwttoolpath: /usr/local/bin/bwtool

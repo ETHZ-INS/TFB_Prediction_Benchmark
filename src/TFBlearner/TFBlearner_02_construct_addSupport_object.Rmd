@@ -1,0 +1,120 @@
+---
+title: "Construct Object TFBlearner"
+output: html_document
+date: "2025-03-13"
+params: 
+  outDir: "data/TFBlearner/objects"
+  maePath: "data/TFBlearner/objects/basic_object"
+  combinationsPath: "combinations.tsv"
+  threads: 16
+---
+
+
+```{r setup, include=FALSE}
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(EnsDb.Hsapiens.v86)
+library(parallel)
+library(TFBlearner)
+library(data.table)
+library(GenomicRanges)
+library(BiocParallel)
+
+setDTthreads(as.integer(params$threads))
+```
+
+
+# Compile object
+
+```{r, determine training/testing combinations, error=TRUE}
+combinations <- fread(file.path("../..", params$combinationsPath))
+trainData <- subset(combinations, set=="trainData")
+testData <- subset(combinations, set=="testData")
+
+valContexts <- unique(testData$CellularContext)
+valContexts
+```
+
+# Add additional data support
+
+Add additional motif data and ChIP-seq data of non-benchmarked TFs.
+```{r, add additional data, eval=TRUE, error=TRUE}
+mae <- readRDS(file.path("../..", params$maePath))
+dhsRanges <- rowRanges(mae[["ChIP"]])
+
+maeFull <- readRDS("../../data/TFBlearner/addSupport/maeAddSupport.rds")
+cols <- lapply(experiments(maeFull), function(n) {
+        colnames(n)[colnames(n) %in% unique(subset(sampleMap(maeFull), 
+             isTraining)$colname)]})
+maeFull <- subsetByColumn(maeFull, cols)
+
+# add additional ChIP-data -----------------------------------------------------
+
+chIPSeAdd <- experiments(maeFull)$ChIP
+chIPSeAdd <- IRanges::subsetByOverlaps(chIPSeAdd, dhsRanges, type = "equal")
+chIPSe <- experiments(mae)$ChIP
+
+# use only TFs which are not used already
+chIPSeAdd <- chIPSeAdd[,!(chIPSeAdd$tfName %in% chIPSe$tfName)]
+chIPSeComb <- cbind(chIPSe, chIPSeAdd)
+chIPMap <- data.frame(primary=colData(chIPSeComb)[["context"]],
+                      colname=colData(chIPSeComb)[["combination"]],
+                      stringsAsFactors=FALSE)
+allContexts <- unique(colData(chIPSeComb)$context)
+
+# same ATAC-data as basic object -----------------------------------------------
+atacSe <- experiments(mae)$ATAC
+atacMap <- data.frame(primary=colData(atacSe)[["context"]],
+                      colname=colData(atacSe)[["context"]],
+                      stringsAsFactors=FALSE)
+atacPromSe <- experiments(mae)$ATAC.Promoters
+atacPromMap <- data.frame(primary=colData(atacPromSe)[["context"]],
+                          colname=colData(atacPromSe)[["context"]],
+                          stringsAsFactors=FALSE)
+
+# add additional Motif-Data ----------------------------------------------------
+motifsSeComb <- experiments(maeFull)$Motifs
+motifsSeComb <- IRanges::subsetByOverlaps(motifsSeComb, dhsRanges, type = "equal")
+metadata(colData(motifsSeComb))$baseDir <- "../../data/TFBlearner/addSupport/assays/motifs"
+
+motifMap <- data.frame(primary=rep(allContexts, ncol(motifsSeComb)),
+                       colname=rep(colnames(motifsSeComb),
+                                   each=length(allContexts)),
+                       stringsAsFactors=FALSE)
+
+# ------------------------------------------------------------------------------
+
+# annotate
+objList <- list(atacSe, atacPromSe, chIPSeComb, motifsSeComb)
+names(objList) <- c("ATAC", "ATAC.Promoters", "ChIP", "Motifs")
+
+listMap <- list(atacMap, atacPromMap, chIPMap, motifMap)
+names(listMap) <- c("ATAC", "ATAC.Promoters", "ChIP", "Motifs")
+dfMap <- listToMap(listMap)
+
+annoData <- data.frame(row.names=allContexts)
+annoData[["context"]] <- unique(colData(chIPSeComb)$context)
+
+# create mae with additional support
+mae <- MultiAssayExperiment(experiments=objList, colData=annoData,
+                            sampleMap=dfMap)
+matchedContexts <- intersect(colnames(atacSe), colData(chIPSe)$context)
+
+annoDt <- as.data.table(sampleMap(mae))
+annoDt[,isTesting:=fifelse(primary %in% valContexts, TRUE, FALSE)]
+annoDt[,isTraining:=fifelse(!(primary %in% valContexts) &
+                              primary %in% matchedContexts, TRUE, FALSE)]
+
+primary <- colData(mae)[["context"]]
+colData(mae)$isTesting <- fifelse(primary %in% valContexts, TRUE, FALSE)
+colData(mae)$isTraining <- fifelse(!(primary %in% valContexts) &
+                                     primary %in% matchedContexts, TRUE, FALSE)
+sampleMap(mae) <- annoDt
+saveRDS(mae, file.path("../..", params$outDir, "01_maeAddSupport.rds"))
+gc()
+```
+
+
+
+```{r, session info}
+sessionInfo()
+```
