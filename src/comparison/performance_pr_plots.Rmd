@@ -1,0 +1,1172 @@
+---
+title: "Performance Comparison Plots: Precision-Recall"
+output: html_document
+date: "2025-09-18"
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(patchwork)
+library(viridis)
+library(data.table)
+library(scales)
+source("../utils/plot_theme.R")
+
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", 
+                "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+baselineScores <- c("ChIP.nearest", "ChIP.any", 
+                    "ChIP.mean", "ChIP.max",
+                    "C-score", "FIMO", 
+                    "ATAC.totaloverlaps", "ATAC.nucleosomefree", 
+                    "ATAC+motif")
+baselineColors <- rep("black", length(baselineScores))
+names(baselineColors) <- baselineScores
+modelTypeColors <- c("Baseline scores"="#525252",
+                     "Motif match-based method"="#C8C8C8",
+                     "Supervised & motif match-based method"="#EBEBEB",
+                     "Supervised method"="#FFFFFF")
+modelBase <- c("ChIP.nearest", "ATAC.totaloverlaps", "ATAC.nucleosomefree", 
+               "ATAC+motif", "BMO", "TOP", "FIMO", "TFBlearner.basic", 
+               "TFBlearner.full", "maxATAC.100", "maxATAC.default", 
+               "C-score")
+methods <- c("BMO", "maxATAC.100", "maxATAC.default",
+             "TFBlearner.full", "TFBlearner.basic", 
+             "TOP")
+```
+
+## DHS
+
+```{r, load performance data dhs}
+pr.dhs <- list.files("performance_pr", pattern="pr.*.dhs.rds", 
+                     full.names=TRUE)
+pr.dhs <- pr.dhs[!grepl("subset", pr.dhs)]
+pr.dhs <- lapply(pr.dhs, readRDS)
+pr.dhs <- rbindlist(pr.dhs, fill=TRUE, use.names=TRUE)
+pr.dhs[,FCE:=scores/frac_pos]
+```
+
+To rank methods, the metrics using all and high-confidence peaks will be averaged, and the median and mean of this average metric across datasets will be reported.
+```{r, averaged metrics dhs}
+pr.dhs.av <- subset(pr.dhs, peak_set %in% c("merged_peaks", "noncons_peaks")) 
+pr.dhs.av <- pr.dhs.av[,.(scores=mean(scores), 
+                          frac_pos=mean(frac_pos),
+                          FCE=mean(FCE),
+                          n=.N), 
+                       by=.(model, metric, comb, tf, context)]
+pr.dhs.av$peak_set <- "average_noncons_merged"
+pr.dhs <- rbind(pr.dhs, pr.dhs.av, fill=TRUE, use.names=TRUE)
+pr.dhs[,median_model:=median(scores), 
+       by=.(model, metric, peak_set)]
+pr.dhs[,median_auprc_comb:=median(scores), 
+       by=.(comb, metric, peak_set)]
+```
+
+
+```{r, rank plot}
+pr.dhs.base <- subset(pr.dhs, !grepl(".extended", model, fixed=TRUE) & 
+                              model %in% modelBase)
+pr.dhs.base[,model_type:=fifelse(model %in% c("TFBlearner.full", 
+                                              "TFBlearner.basic",
+                                              "maxATAC.default",
+                                              "maxATAC.100"), 
+                                "Supervised method",
+                                "Baseline scores")]
+pr.dhs.base[,model_type:=fifelse(model=="BMO", "Motif match-based method", model_type)]
+pr.dhs.base[,model_type:=fifelse(model=="TOP", "Supervised & motif match-based method", model_type)]
+
+pr.dhs.base.aucpr <- subset(pr.dhs.base, metric=="AUPRC" & 
+                            peak_set=="average_noncons_merged")
+setorder(pr.dhs.base.aucpr, median_model)
+pr.dhs.base.aucpr[,model:=factor(model, 
+                              levels=unique(pr.dhs.base.aucpr$model), 
+                              ordered=TRUE)]
+pr.dhs.base.aucpr[,type:=fifelse(model %in% baselineScores, 
+                                 "Baseline scores", "Methods")]
+pbp.pr <- ggplot(pr.dhs.base.aucpr, aes(y=model, x=scores))+
+          labs(x="AUPRC", tags="A", y="Method", fill="Model type", 
+               #subtitle="Aggregated sets: AUCPR"
+               )+
+          geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
+          scale_fill_manual(values=modelTypeColors)+
+          scale_color_manual(values=c(methodColors, 
+                                      baselineColors))+
+          guides(colour = "none")+
+          #scale_x_discrete(guide = guide_axis(n.dodge=3))+
+          stat_summary(fun.x = mean, geom = "errorbar", 
+                       aes(xmax = ..x.., xmin = ..x..),
+                 width = .75, linetype = "dashed")+
+          theme_sleek()+
+          theme(axis.title.y=element_blank(), 
+                legend.position="bottom")
+          #theme(legend.position="right",
+          #      legend.margin=margin(-5,-5,-5,-5),
+          #      legend.box.margin=margin(-5,-5,-5,-5))
+pbp.pr
+
+pr.dhs.base.ppv0.05 <- subset(pr.dhs.base, metric=="PPV.0.05" & 
+                                           peak_set=="average_noncons_merged")
+setorder(pr.dhs.base.ppv0.05, median_model)
+pr.dhs.base.ppv0.05[,model:=factor(model, 
+                                   levels=unique(pr.dhs.base.ppv0.05$model), 
+                                   ordered=TRUE)]
+pr.dhs.base.ppv0.05[,type:=fifelse(model %in% baselineScores, 
+                                  "Baseline scores", "Methods")]
+pbp.prec0.05 <- ggplot(pr.dhs.base.ppv0.05, aes(y=model, x=scores))+
+                labs(x="Precision at 5% Recall", 
+                     tags="C", y="Method", fill="Model type",
+                     #subtitle="Aggregated sets: Precision at 5% Recall"
+                     )+
+                geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
+                scale_fill_manual(values=modelTypeColors)+
+                scale_color_manual(values=c(methodColors, 
+                                             baselineColors))+
+                guides(colour = "none")+
+                stat_summary(fun.x = mean, geom = "errorbar", 
+                             aes(xmax = ..x.., xmin = ..x..),
+                             width = .75, linetype = "dashed")+
+                theme_sleek()+
+                 theme(axis.title.y=element_blank(), 
+                       legend.position="bottom")
+                #theme(legend.position="right",
+                #      legend.margin=margin(-5,-5,-5,-5),
+                #      legend.box.margin=margin(-5,-5,-5,-5))
+pbp.prec0.05
+
+pr.dhs.base.ppv0.1 <- subset(pr.dhs.base, metric=="PPV.0.1" & 
+                                          peak_set=="average_noncons_merged")
+setorder(pr.dhs.base.ppv0.1, median_model)
+pr.dhs.base.ppv0.1[,model:=factor(model, 
+                                   levels=unique(pr.dhs.base.ppv0.1$model), 
+                                   ordered=TRUE)]
+pr.dhs.base.ppv0.1[,type:=fifelse(model %in% baselineScores, 
+                                  "Baseline scores", "Methods")]
+pbp.prec0.1 <- ggplot(pr.dhs.base.ppv0.1, aes(y=model, x=scores))+
+                labs(x="Precision at 10% Recall", tags="D", y="Method",
+                     #subtitle="Aggregated sets: Precision at 10% Recall",
+                     fill="Model type")+
+                geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
+                scale_fill_manual(values=modelTypeColors)+
+                scale_color_manual(values=c(methodColors, 
+                                             baselineColors))+
+                guides(colour = "none")+
+                #geom_text(x=median(pr.0.1.dhs.baseline$average_noncons_merged)-0.025,
+                #          label="ChIP-seq nearest cellular context", 
+                #          y="cScore", angle = 90)+
+                stat_summary(fun.x = mean, geom = "errorbar", 
+                             aes(xmax = ..x.., xmin = ..x..),
+                             width = .75, linetype = "dashed")+
+                theme_sleek()+
+                 theme(axis.title.y=element_blank(),
+                       legend.position="bottom")
+                #theme(legend.position="right",
+                #      legend.margin=margin(-5,-5,-5,-5),
+                #      legend.box.margin=margin(-5,-5,-5,-5))
+pbp.prec0.1
+
+
+pr.dhs.base.fce <- subset(pr.dhs.base, metric=="AUPRC" & 
+                            peak_set=="average_noncons_merged")
+pr.dhs.base.fce[,median_fce_model:=median(FCE), by=model]
+setorder(pr.dhs.base.fce, median_fce_model)
+pr.dhs.base.fce[,model:=factor(model, 
+                               levels=unique(pr.dhs.base.fce$model), 
+                               ordered=TRUE)]
+pr.dhs.base.fce[,type:=fifelse(model %in% baselineScores, 
+                                 "Baseline scores", "Methods")]
+pbp.fce <- ggplot(pr.dhs.base.fce, aes(y=model, x=FCE))+
+                 labs(x="Enrichment over random", 
+                      tags="B", y="Method", color=NULL, 
+                      #subtitle="Aggregated sets: Enrichment over random",
+                      fill="Model type")+
+                 geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
+                 scale_color_manual(values=c(methodColors, 
+                                             baselineColors))+
+                 guides(colour = "none")+
+                 scale_fill_manual(values=modelTypeColors)+
+                 stat_summary(fun.x = mean, geom = "errorbar", 
+                              aes(xmax = ..x.., xmin = ..x..),
+                              width = .75, linetype = "dashed")+
+                 scale_x_log10()+
+                 theme_sleek()+
+                 theme(axis.title.y=element_blank(),
+                       legend.position="bottom")
+                 #theme(legend.position="right",
+                #       legend.margin=margin(-5,-5,-5,-5),
+                #       legend.box.margin=margin(-5,-5,-5,-5))
+
+p.pred.step <- readRDS("p.pred.step.rds")
+p.train.step <- readRDS("p.train.step.opt1.rds")
+(pbp.pr + pbp.prec0.05 + p.train.step)  /  
+guide_area() /  
+(pbp.fce  + pbp.prec0.1 + p.pred.step)+plot_layout(widths=c(1,1,2), 
+                                                   heights=c(1,0.05,1),
+                                                   guides="collect", 
+                                                   axes="collect")
+ggsave("main_perf_opt1.pdf", units="cm",
+       width=35, height=20, dpi=150)
+
+#(pbp.pr + pbp.prec0.05)  / 
+#(pbp.fce  + pbp.prec0.1) / 
+#free(p.train.step + p.pred.step)+plot_layout(heights=c(1,1,2), guides="collect")
+#ggsave("main_perf.png", units="cm", width=30, height=35)
+p.train.step <- readRDS("p.train.step.opt2.rds")
+p.pred.step <- readRDS("p.pred.step.opt2.rds")
+(pbp.pr + pbp.prec0.05 + p.train.step)  /  
+guide_area() /  
+(pbp.fce  + pbp.prec0.1 + p.pred.step)+plot_layout(widths=c(1,1,2), 
+                                                   heights=c(1,0.05,1),
+                                                   guides="collect", 
+                                                   axes="collect")
+ggsave("main_perf_opt2.pdf", units="cm", 
+       width=35, height=20, dpi=150)
+``` 
+
+```{r, fold-change over enrichment}
+p.p.pos_frac.pr <- ggplot(subset(pr.dhs.base.fce, model %in% methods), 
+                       aes(y=scores, x=frac_pos, color=model))+
+                facet_wrap(~model, scales="free", ncol=6)+
+                labs(y="AUPRC", x="Proportion of positives", tags="E")+
+                #scale_x_sqrt()+
+                scale_x_continuous(breaks=scales::pretty_breaks(3))+
+                scale_color_manual(values=methodColors)+
+                geom_smooth()+
+                geom_point()+
+                theme_sleek()+
+                theme(legend.position="right",
+                      strip.text=element_text(size=14), 
+                      axis.text.x=element_text(size=14),
+                      axis.title.x=element_text(size=14),
+                      axis.text.y=element_text(size=14),
+                      axis.title.y=element_text(size=14), 
+                      legend.title=element_text(size=14),
+                      legend.text=element_text(size=14),
+                      plot.tag=element_text(size=20))
+p.p.pos_frac.fce <- ggplot(subset(pr.dhs.base.fce, model %in% methods), 
+                       aes(y=FCE, x=frac_pos, color=model))+
+                facet_wrap(~model, 
+                           scales="free",
+                           ncol=6)+
+                scale_x_continuous(breaks=scales::pretty_breaks(3))+
+                labs(y="Enrichment over random", x="Proportion of positives", tags="F")+
+                #scale_x_sqrt()+
+                scale_color_manual(values=methodColors)+
+                geom_smooth()+
+                geom_point()+
+                theme_sleek()+
+                theme(legend.position="right",
+                      strip.text=element_text(size=14), 
+                      axis.text.x=element_text(size=14),
+                      axis.title.x=element_text(size=14),
+                      axis.text.y=element_text(size=14),
+                      axis.title.y=element_text(size=14), 
+                      legend.title=element_text(size=14),
+                      legend.text=element_text(size=14),
+                      plot.tag=element_text(size=20))
+#p.bp.pr / free(p.p.pos_frac)
+```
+
+```{r, heatmaps}
+pr.dhs.base <- subset(pr.dhs.base, peak_set!="average_noncons_merged")
+pr.dhs.base[,model:=factor(model, levels=levels(pr.dhs.base.aucpr$model), 
+                                  ordered=TRUE)]
+pr.dhs.base[,color_flag:=fifelse(scores>mean(pr.dhs.base$scores), TRUE, FALSE)]
+pr.dhs.base[,`Peak Set`:=as.character(peak_set)]
+pr.dhs.base[,`Peak Set`:=fifelse(`Peak Set`=="merged_peaks", "Merged", 
+                                 `Peak Set`)]
+pr.dhs.base[,`Peak Set`:=fifelse(`Peak Set`=="noncons_peaks", "IDR-thresh.", 
+                                 `Peak Set`)]
+pr.dhs.base[,`Peak Set`:=fifelse(`Peak Set`=="unamb_peaks", "Unambigious", 
+                                 `Peak Set`)]
+pr.dhs.base[,`Peak Set`:=fifelse(`Peak Set`=="noncrowded_peaks", "Non-crowded", 
+                                 `Peak Set`)]
+pr.dhs.base[,`Peak Set`:=fifelse(`Peak Set`=="nonmotif_peaks", "No motif", 
+                                 `Peak Set`)]
+pr.dhs.base[,`Peak Set`:=fifelse(`Peak Set`=="notrain_peaks", "Not in train", 
+                                 `Peak Set`)]
+pr.dhs.base[,`Peak Set`:=factor(pr.dhs.base$`Peak Set`,
+                               levels=c("Merged", "IDR-thresh.",
+                                        "Unambigious", "Non-crowded", 
+                                        "No motif", "Not in train"), 
+                               ordered=TRUE)]
+pr.dhs.base.ag <- subset(pr.dhs.base, metric=="AUPRC")[,.(median_auprc=median(scores), 
+                                                          median_fce=median(FCE)), 
+                                                          by=.(model, `Peak Set`)]
+pr.dhs.base.ag[,set_type:=fifelse(`Peak Set` %in% c("No motif", "Not in train"),
+                                                    "Exploratory", "Evaluation sets")]
+pr.dhs.base.ag[,color_flag:=fifelse(median_auprc>mean(pr.dhs.base$median_auprc), TRUE, FALSE)]
+pr.order <- subset(pr.dhs.base.ag, `Peak Set`=="Merged")
+pr.order[,model:=as.character(model)]
+setorder(pr.order, median_auprc)
+pr.dhs.base.ag[,model:=factor(pr.dhs.base.ag$model, 
+                              levels=unique(pr.order$model), 
+                              ordered=TRUE)]
+ph.pr <- ggplot(pr.dhs.base.ag, 
+                aes(y=model, x=`Peak Set`, fill=median_auprc))+
+  geom_tile()+
+  labs(fill="Median AUPRC", y="", tags="A")+
+  geom_text(aes(label=round(median_auprc, 3), colour=color_flag), size=5)+
+  scale_colour_manual(values = c("white", "black"), guide = "none") +
+  scale_fill_viridis(option="B")+
+  facet_grid(cols=vars(set_type), scales="free", space = "free")+
+  scale_x_discrete(guide = guide_axis(n.dodge=2))+
+  theme_sleek()+
+  theme(legend.position="right", 
+        legend.margin=margin(-5,-5,-5,-5),
+        legend.box.margin=margin(-5,-5,-5,-5), 
+        strip.text=element_text(size=14), 
+        axis.text.x=element_text(size=14),
+        axis.title.x=element_text(size=14),
+        axis.text.y=element_text(size=14),
+        axis.title.y=element_text(size=14), 
+        legend.title=element_text(size=14),
+        legend.text=element_text(size=14),
+        plot.tag=element_text(size=20))
+ph.pr
+
+pr.dhs.base.ag2 <- copy(pr.dhs.base.ag)
+pr.dhs.base.ag2[,color_flag:=fifelse(median_fce>mean(pr.dhs.base.ag$median_fce), TRUE, FALSE)]
+pr.order <- subset(pr.dhs.base.ag2, `Peak Set`=="Merged")
+setorder(pr.order, median_fce)
+pr.dhs.base.ag2[,model:=factor(pr.dhs.base.ag2$model, 
+                              levels=unique(pr.order$model), 
+                              ordered=TRUE)]
+ph.fce <- ggplot(pr.dhs.base.ag2, aes(y=model, x=`Peak Set`, fill=median_fce))+
+  geom_tile()+
+  labs(fill="Median enrichment\nover random", y="", tags="B")+
+  geom_text(aes(label=round(median_fce, 3), colour=color_flag), size=5)+
+  scale_colour_manual(values = c("white", "black"), guide = "none") +
+  scale_fill_viridis(option="B")+
+  facet_grid(cols=vars(set_type), scales="free", space = "free")+
+  scale_x_discrete(guide = guide_axis(n.dodge=2))+
+  theme_sleek()+
+  theme(legend.position="right", 
+        legend.margin=margin(-5,-5,-5,-5),
+        legend.box.margin=margin(-5,-5,-5,-5), 
+        strip.text=element_text(size=14), 
+        axis.text.x=element_text(size=14),
+        axis.title.x=element_text(size=14),
+        axis.text.y=element_text(size=14),
+        axis.title.y=element_text(size=14), 
+        legend.title=element_text(size=14),
+        legend.text=element_text(size=14),
+        plot.tag=element_text(size=20))
+
+pr.dhs.base.ag <- subset(pr.dhs.base, metric=="PPV.0.05")[,.(median_ppv0.05=median(scores)), 
+                                                           by=.(model, `Peak Set`)]
+pr.dhs.base.ag[,set_type:=fifelse(`Peak Set` %in% c("No motif", "Not in train"),
+                                                 "Exploratory", "Evaluation sets")]
+pr.dhs.base.ag[,color_flag:=fifelse(median_ppv0.05>mean(pr.dhs.base.ag$median_ppv0.05), TRUE, FALSE)]
+pr.order <- subset(pr.dhs.base.ag, `Peak Set`=="Merged")
+setorder(pr.order, median_ppv0.05)
+pr.dhs.base.ag[,model:=factor(pr.dhs.base.ag$model, 
+                              levels=unique(pr.order$model), 
+                              ordered=TRUE)]
+ph.pr.0.05 <- ggplot(pr.dhs.base.ag, aes(y=model, x=`Peak Set`, fill=median_ppv0.05))+
+  geom_tile()+
+  labs(fill="Median Precision\nat 5% Recall", y="", tags="C")+
+  geom_text(aes(label=round(median_ppv0.05, 3), colour=color_flag), size=5)+
+  scale_colour_manual(values = c("white", "black"), guide = "none") +
+  facet_grid(cols=vars(set_type), scales="free", space = "free")+
+  scale_fill_viridis(option="C")+
+  scale_x_discrete(guide = guide_axis(n.dodge=2))+
+  theme_sleek()+
+  theme(legend.position="right", 
+        legend.margin=margin(-5,-5,-5,-5),
+        legend.box.margin=margin(-5,-5,-5,-5),
+        strip.text=element_text(size=14), 
+        axis.text.x=element_text(size=14),
+        axis.title.x=element_text(size=14),
+        axis.text.y=element_text(size=14),
+        axis.title.y=element_text(size=14), 
+        legend.title=element_text(size=14),
+        legend.text=element_text(size=14),
+        plot.tag=element_text(size=20))
+
+pr.dhs.base.ag <- subset(pr.dhs.base, metric=="PPV.0.1")[,.(median_ppv0.1=median(scores)), 
+                                                           by=.(model, `Peak Set`)]
+pr.dhs.base.ag[,set_type:=fifelse(`Peak Set` %in% c("No motif", "Not in train"),
+                                                 "Exploratory", "Evaluation sets")]
+pr.dhs.base.ag[,color_flag:=fifelse(median_ppv0.1>mean(pr.dhs.base.ag$median_ppv0.1), TRUE, FALSE)]
+pr.order <- subset(pr.dhs.base.ag, `Peak Set`=="Merged")
+setorder(pr.order, median_ppv0.1)
+pr.dhs.base.ag[,model:=factor(pr.dhs.base.ag$model, 
+                              levels=unique(pr.order$model), 
+                              ordered=TRUE)]
+ph.pr.0.1 <- ggplot(pr.dhs.base.ag, aes(y=model, x=`Peak Set`, fill=median_ppv0.1))+
+  geom_tile()+
+  labs(fill="Median Precision\nat 10% Recall", y="", tags="D")+
+  geom_text(aes(label=round(median_ppv0.1, 3), colour=color_flag), size=5)+
+  scale_colour_manual(values = c("white", "black"), guide = "none") +
+  facet_grid(cols=vars(set_type), scales="free", space = "free")+
+  scale_fill_viridis(option="D")+
+  scale_x_discrete(guide = guide_axis(n.dodge=2))+
+  theme_sleek()+
+  theme(legend.position="right", 
+        legend.margin=margin(-5,-5,-5,-5),
+        legend.box.margin=margin(-5,-5,-5,-5), 
+        #legend.text.position="top", 
+        strip.text=element_text(size=14), 
+        axis.text.x=element_text(size=14),
+        axis.title.x=element_text(size=14),
+        axis.text.y=element_text(size=14),
+        axis.title.y=element_text(size=14), 
+        legend.title=element_text(size=14),
+        legend.text=element_text(size=14),
+        plot.tag=element_text(size=20))
+
+p2.ph <- ph.pr + ph.pr.0.05 + ph.fce + ph.pr.0.1 +plot_layout(ncol=2, nrow=2)
+p1 <- (p.p.pos_frac.pr / p.p.pos_frac.fce) + plot_layout(guides="collect")
+p2.ph / free(p1) + plot_layout(heights=c(2.5,2))
+ggsave("supplementary_peak_sets.pdf", 
+       width=52, height=50, units="cm", dpi=150) # 45, 35
+```
+
+
+```{r}
+pr.dhs.subsets <- list.files("performance_pr", pattern="*subsets.*.rds", 
+                             full.names=TRUE)
+pr.dhs.subsets <- pr.dhs.subsets[!grepl(".extended", pr.dhs.subsets, fixed=TRUE) & 
+                                  grepl("dhs", pr.dhs.subsets)]
+pr.dhs.subsets <- lapply(pr.dhs.subsets, readRDS)
+pr.dhs.subsets <- rbindlist(pr.dhs.subsets)
+
+pr.dhs.methods.metric <- subset(pr.dhs.subsets, metric=="fc_randExp")
+pr.dhs.methods.metric[,type:=fifelse(grepl("chip", model) | 
+                        model %in% baselineScores, 
+                        "Basline", "Methods")]
+pr.ag2.dhs <- pr.dhs.methods.metric[,.(FCE=median(value)), 
+                                       by=c("model", "set")]
+pr.ag2.dhs[, FCE.comb := mean(FCE[set == "p2.4.n1.3"], na.rm = TRUE),
+           by = model]
+setorder(pr.ag2.dhs, FCE.comb)
+pr.ag2.dhs[,model:=factor(model, levels=unique(pr.ag2.dhs$model), ordered=TRUE)]
+pr.ag2.dhs[,color_flag:=fifelse(FCE>mean(pr.ag2.dhs$FCE), TRUE, FALSE)]
+
+library(dplyr)
+x2 <- recode(pr.ag2.dhs$set, 
+             p2.4.n1.3="All", 
+             p2.n1.3="Only Test pos.", 
+             p4.n1.3="Both pos.",
+             p2.n1="Only Test pos. & both neg.",
+             p4.n1="Both pos. & both neg.",
+             p2.4.n1="Test pos. & both neg.",
+             p2.n3="Setdiff pos. & neg.",
+             p4.n3="Pos in both vs all train pos",
+             p2.4.n3="Pos in test vs all train pos")
+pr.ag2.dhs[,set:=factor(x2, levels=c("All", 
+                                            "Only Test pos.", 
+                                            "Both pos.", 
+                                            "Only Test pos. & both neg.",
+                                            "Both pos. & both neg.",
+                                            "Test pos. & both neg.",
+                                            "Setdiff pos. & neg.",
+                                            "Pos in both vs all train pos",
+                                            "Pos in test vs all train pos"), 
+                               ordered=TRUE)]
+pr.ag2.dhs[,set_type_neg:=fifelse(set %in% c("All", 
+                                             "Only Test pos.", 
+                                             "Both pos."), 
+                              "All Test", "Only Test")]
+pr.ag2.dhs[,set_type_neg:=fifelse(set %in% c("Only Test pos. & both neg.",
+                                                    "Both pos. & both neg.", 
+                                                    "Test pos. & both neg."), 
+                              "Only in both", set_type_neg)]
+pr.ag2.dhs[,set_pos:=fifelse(set %in% c("Only Test pos.", 
+                                               "Only Test pos. & both neg.", 
+                                               "Setdiff pos. & neg."), 
+                             "Only Test", "Only in both")]
+pr.ag2.dhs[,set_pos:=fifelse(set %in% c("All", 
+                                               "Test pos. & both neg.", 
+                                               "Pos in test vs all train pos"), 
+                             "All Test", set_pos)]
+
+annotSet <- unique(pr.ag2.dhs[,c("set_type_neg", 
+                                 "set_pos"), with=FALSE], 
+                   by=c("set_type_neg", "set_pos"))
+
+annotSet[,`Positive set 1`:=fifelse(set_pos=="All Test" | set_pos=="Only Test", 
+                                    "Peak only in Test", NA)]
+annotSet[,`Positive set 2`:=fifelse(set_pos=="Only Test", 
+                                    NA, "Peak in train and test")]
+annotSet[,`Negative set 1`:=fifelse(set_type_neg=="All Test" | set_type_neg=="Only in both", 
+                                    "Peak in neither", NA)]
+annotSet[,`Negative set 2`:=fifelse(set_type_neg!="Only in both", "Peak only in Train", NA)]
+annotSet2 <- melt(annotSet, id.vars=c("set_type_neg", "set_pos"), 
+                  variable.name="model", value.name="set")
+
+annotSet2$model <- factor(annotSet2$model, levels = c("Positive set 1",
+                                                      "Positive set 2",
+                                                      "Negative set 1",
+                                                      "Negative set 2",
+                                                      levels(pr.ag2.dhs$model)))
+pr.ag2.dhs[,set_pos:=factor(set_pos, 
+                             levels=unique(pr.ag2.dhs$set_pos), 
+                             ordered=TRUE)]
+lvl_pos <- c("All Test", "Only in both", "Only Test")
+pr.ag2.dhs[, set_pos := factor(set_pos, levels = lvl_pos, ordered=TRUE)]
+annotSet2[, set_pos := factor(set_pos, levels = lvl_pos, ordered=TRUE)]
+ 
+pr.ag2.dhs[,set_type_neg:=factor(set_type_neg, 
+                                 levels=unique(pr.ag2.dhs$set_type_neg),
+                                 ordered=TRUE)]
+lvl_neg <- levels(pr.ag2.dhs$set_type_neg)
+pr.ag2.dhs[, set_type_neg := factor(set_type_neg, levels = lvl_neg, ordered=TRUE)]
+annotSet2[, set_type_neg := factor(set_type_neg, levels = lvl_neg, ordered=TRUE)]
+
+
+#pr.ag2.dhs[,model:=factor(pr.ag2.dhs$model, levels=levels(annotSet2$model), ordered=TRUE)]
+pr.ag2.dhs$type <- "Models"
+annotSet2$type <- "Set"
+colorsSets <- cbbPalette[2:5]
+names(colorsSets) <- c("Peak in train and test", "Peak only in Train",
+                       "Peak only in Test", "Peak in neither")
+
+p.hp.sets <- ggplot(pr.ag2.dhs, aes(y=model, x=set_pos, fill=FCE))+
+  geom_tile()+
+  #facet_grid(cols=vars(set_type_neg), rows=vars(type), scales="free")+
+  ggh4x::facet_nested(type~ "Set of negatives" + set_type_neg, 
+                      scales="free_y", space="free")+
+  labs(fill="Median Enrichment\n over Expectation", y="", tags="B", x="Peak sets used")+
+  geom_text(aes(label=round(FCE, 3), colour=color_flag), size=4)+
+  scale_colour_manual(values = c("white", "black"), guide = "none") +
+  scale_fill_viridis(option="B",trans = "log",
+                       breaks = scales::log_breaks(),
+                       labels = scales::label_number())+
+  scale_x_discrete(guide = guide_axis(n.dodge=2))+
+  ggnewscale::new_scale_fill()+
+  geom_tile(data = annotSet2, aes(x=set_pos, y=model, fill=set, alpha=set), 
+            inherit.aes=FALSE) +
+  scale_fill_manual(values = colorsSets, name = "Sets", na.translate = FALSE, 
+                    guide="none")+
+  scale_alpha_manual(values=c("1"=1, "2"=1,"3"=1,"4"=1),
+                     guide = "none")+
+  #scale_y_discrete(limits = c(levels(annotSet2$model)),
+  #                 expand = c(0, 0)) +
+  #coord_fixed()+
+  theme_sleek()+
+  theme(panel.spacing = unit(2, "pt"),
+        panel.spacing.y = grid::unit(2, "pt"),
+        axis.text.x=element_blank(),
+        strip.text.x= element_blank(),
+        strip.text.y= element_text(size=14),
+        axis.title.x=element_text(size=14),
+        axis.text.y=element_text(size=12), 
+        legend.title=element_text(size=12), 
+        legend.text=element_text(size=12), 
+        plot.tag=element_text(size=20))
+          #element_text(size = 14, family = "Helvetica"))
+p.hp.sets
+
+annotSub <- data.table(Set=c("Peak in neither", 
+                             "Peak only in Test", 
+                             "Peak only in Train", "Peak in\ntrain and test"), 
+                       `Peak in train`=c(FALSE, FALSE, TRUE, TRUE), 
+                       `Peak in test`=c(FALSE, TRUE, FALSE, TRUE))
+annotSub[,Set:=factor(Set, levels=c("Peak in\ntrain and test", "Peak only in Train",
+                                    "Peak only in Test", "Peak in neither"), 
+                      ordered=TRUE)]
+names(colorsSets) <- c("Peak in\ntrain and test", "Peak only in Train",
+                       "Peak only in Test", "Peak in neither")
+p.scheme.sets <- ggplot(annotSub, aes(x=`Peak in test`, 
+                                      y=`Peak in train`, fill=Set))+
+            geom_tile()+
+            geom_text(aes(label=Set), size=4)+
+            labs(tag="A")+
+            scale_fill_manual(values=colorsSets)+
+            theme_sleek()+
+            theme(
+                  #axis.title.x = element_text(size = 16, family = "Helvetica"),
+                  #axis.title.y = element_text(size = 16, family = "Helvetica"),
+                  aspect.ratio = 1,
+                  axis.title.x=element_text(size=12),
+                  axis.title.y=element_text(size=12),
+                  axis.text.x=element_text(size=12),
+                  axis.text.y=element_text(size=12), 
+                  legend.title=element_text(size=12), 
+                  legend.text=element_text(size=12), 
+                  plot.tag=element_text(size=20))
+p.scheme.sets
+p.scheme.sets + p.hp.sets + plot_layout(widths=c(1,2))
+```
+
+```{r}
+labels.dhs <- readRDS("labels.dhs.rds")
+nUniquePeaks <- list()
+for(tfI in unique(labels.dhs$tf)){
+  labels.dhs.sub <- subset(labels.dhs, tf==tfI)
+  
+  peaksTest <- which(labels.dhs.sub$hc.peak.ov>0)
+  inBoth <- intersect(peaksTest, 
+                      which(labels.dhs.sub$ov.trainPeak))
+  nUnique <- length(setdiff(peaksTest,inBoth))/length(peaksTest)
+  nUniquePeaks[[tfI]] <- data.table(n_unique=nUnique)
+}
+nUniquePeaks <- rbindlist(nUniquePeaks, idcol="TF")
+table(labels.dhs.sub$ov.trainPeak, labels.dhs.sub$hc.peak.ov>0)
+
+labels.dhs[, merged_peaks:=fifelse(hc.peak.ov>0, TRUE, FALSE)]
+labels.dhs[, in_both:=fifelse(ov.trainPeak & merged_peaks, TRUE, FALSE)]
+labels.ag <- labels.dhs[, .(frac_in_train=sum(in_both)/sum(merged_peaks),
+                            pos_frac=sum(merged_peaks)/.N), by=comb]
+
+pr.ov.stats <- merge(subset(pr.dhs.methods.metric, type=="Methods" & set=="p2.4.n1.3"), 
+                     labels.ag, by=c("comb"))
+pr.ov.stats[,median_fc:=median(value), by=model]
+setorder(pr.ov.stats, median_fc)
+pr.ov.stats[,model:=factor(pr.ov.stats$model, 
+                           levels=unique(pr.ov.stats$model), 
+                           ordered=TRUE)]
+p.point.ft <- ggplot(pr.ov.stats, aes(x=frac_in_train, 
+                                      y=value, 
+                                      color=model))+
+              scale_color_manual(values=methodColors)+
+              scale_y_log10()+
+              facet_grid(cols=vars(model))+
+              labs(y="Median Enrichment over Expectation", 
+                   x="Fraction of Peaks in Train", tags="C")+
+              geom_smooth(se=FALSE, color="black")+
+              geom_hline(data=pr.ov.stats[,.(med=median(value)), by=model], 
+                         aes(yintercept=med), color="black",
+                         linetype="dashed", linewidth = 0.75, show.legend = FALSE)+
+              geom_point(size=2)+
+              theme_sleek()+
+              theme(axis.title.x=element_text(size=12),
+                    axis.title.y=element_text(size=12),
+                    axis.text.x=element_text(size=12),
+                    axis.text.y=element_text(size=12), 
+                    legend.title=element_text(size=12), 
+                    legend.text=element_text(size=12), 
+                    plot.tag=element_text(size=20))
+p.point.ft
+
+setorder(labels.ag, frac_in_train)
+labels.ag[,comb:=factor(labels.ag$comb, levels=unique(labels.ag$comb), ordered=TRUE)]
+p.bar.frac <- ggplot(labels.ag, aes(y=comb, x=frac_in_train))+
+              geom_bar(stat="identity")+
+              labs(y="", x="Fraction of Peaks in Train", tags="D")+
+              theme_sleek()+
+              theme(axis.title.x=element_text(size=12),
+                    axis.title.y=element_text(size=12),
+                    axis.text.x=element_text(size=12),
+                    axis.text.y=element_text(size=12), 
+                    legend.title=element_text(size=12), 
+                    legend.text=element_text(size=12), 
+                    plot.tag=element_text(size=20))
+p.bar.frac
+```
+
+```{r, supplementary figure sets}
+(p.scheme.sets + p.hp.sets + plot_layout(widths=c(1,2))) /  (p.point.ft+p.bar.frac+ plot_layout(widths=c(3,1)))
+ggsave("supplementary_exp_train_peaks.pdf", units="cm",
+       width=50, height=30, dpi=150)
+```
+
+```{r, overall heatmap, DHS}
+setorder(pr.dhs.base, median_auprc_comb)
+pr.dhs.base[,comb:=factor(comb, levels=unique(pr.dhs.base$comb), 
+                          ordered=TRUE)]
+p.hp.full.auprc.dhs <- ggplot(subset(pr.dhs.base, metric=="AUPRC" & 
+                                       model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=scores))+
+geom_tile()+
+geom_text(aes(label=round(scores,2), color=color_flag), size=8)+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
+scale_fill_viridis(option="B")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="AUPRC")+
+theme_sleek()+
+theme(axis.text.x=element_text(size=18),
+      axis.text.y=element_text(size=18),
+      strip.text=element_text(size=20),
+      legend.title=element_text(size=18), 
+      legend.text=element_text(size=18))
+p.hp.full.auprc.dhs
+ggsave("supplementary_full_matrix_aucpr_dhs.pdf", units="cm", 
+       width=52, height=55, dpi=150)
+
+p.hp.full.ppv0.05.dhs <- ggplot(subset(pr.dhs.base, metric=="PPV.0.05" & 
+                                       model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=scores))+
+geom_tile()+
+geom_text(aes(label=round(scores,2), color=color_flag), size=8)+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
+scale_fill_viridis(option="C")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="Precision at\n 5% Recall")+
+theme_sleek()+
+theme(axis.text.x=element_text(size=18),
+      axis.text.y=element_text(size=18),
+      strip.text=element_text(size=20),
+      legend.title=element_text(size=18), 
+      legend.text=element_text(size=18))
+p.hp.full.ppv0.05.dhs
+ggsave("supplementary_full_matrix_ppv0.05_dhs.pdf", 
+       units="cm", width=52, height=55, dpi=150)
+
+
+p.hp.full.ppv0.1.dhs <- ggplot(subset(pr.dhs.base, metric=="PPV.0.1" & 
+                                      model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=scores))+
+geom_tile()+
+geom_text(aes(label=round(scores,2), color=color_flag), size=8)+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
+scale_fill_viridis(option="A")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="Precision at\n 10% Recall")+
+theme_sleek()+
+theme(axis.text.x=element_text(size=18),
+      axis.text.y=element_text(size=18),
+      strip.text=element_text(size=20),
+      legend.title=element_text(size=18), 
+      legend.text=element_text(size=18))
+p.hp.full.ppv0.1.dhs
+ggsave("supplementary_full_matrix_ppv0.1_dhs.pdf", units="cm", 
+       width=52, height=55, dpi=150)
+
+p.hp.full.fce.dhs <- ggplot(subset(pr.dhs.base, metric=="AUPRC" & 
+                                                model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=FCE))+
+geom_tile()+
+geom_text(aes(label=round(FCE), color=color_flag), size=8)+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
+scale_fill_viridis(option="D", trans="log10")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="Enrichment over\nrandom")+
+theme_sleek()+
+theme(axis.text.x=element_text(size=18),
+      axis.text.y=element_text(size=18),
+      strip.text=element_text(size=20),
+      legend.title=element_text(size=18), 
+      legend.text=element_text(size=18))
+p.hp.full.fce.dhs
+ggsave("supplementary_full_matrix_fce_dhs.pdf", units="cm", 
+       width=52, height=55, dpi=150)
+
+
+p.hp.full.auprc.dhs <- ggplot(subset(pr.dhs.base, metric=="AUPRC" & 
+                                     model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=scores))+
+geom_tile()+
+geom_text(aes(label=round(scores,2), color=color_flag))+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, nrow=1)+
+scale_fill_viridis(option="B")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="AUPRC", tags="A")+
+theme_sleek()
+
+p.hp.full.ppv0.05.dhs <- ggplot(subset(pr.dhs.base, metric=="PPV.0.05" & 
+                                                    model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=scores))+
+geom_tile()+
+geom_text(aes(label=round(scores,2), color=color_flag))+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, nrow=1)+
+scale_fill_viridis(option="C")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="Precision at\n 5% Recall", tags="B")+
+theme_sleek()
+
+p.hp.full.ppv0.1.dhs <- ggplot(subset(pr.dhs.base, metric=="PPV.0.1" & 
+                                      model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=scores))+
+geom_tile()+
+geom_text(aes(label=round(scores,2), color=color_flag))+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, nrow=1)+
+scale_fill_viridis(option="A")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="Precision at\n 10% Recall", tags="C")+
+theme_sleek()
+p.hp.full.ppv0.1.dhs
+
+p.hp.full.fce.dhs <- ggplot(subset(pr.dhs.base, metric=="AUPRC" & 
+                                   model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=FCE))+
+geom_tile()+
+geom_text(aes(label=round(FCE), color=color_flag))+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, nrow=1)+
+scale_fill_viridis(option="D", trans="log10")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="Enrichment over\nrandom", tags="D")+
+theme_sleek()
+
+p.hp.full.auprc.dhs/
+p.hp.full.ppv0.05.dhs /
+p.hp.full.ppv0.1.dhs / 
+p.hp.full.fce.dhs
+ggsave("supplementary_full_matrix_combined_dhs.pdf", 
+       units="cm", width=50, height=70, dpi=150)
+```
+
+# Full genome
+
+```{r, load performance data full genome}
+pr.full <- list.files("performance_pr", pattern="pr.*.full.rds", 
+                     full.names=TRUE)
+pr.full <- pr.full[!grepl("subset", pr.full)]
+pr.full <- lapply(pr.full, readRDS)
+pr.full <- rbindlist(pr.full, fill=TRUE, use.names=TRUE)
+pr.full[,FCE:=scores/frac_pos]
+```
+
+To rank methods, the metrics using all and high-confidence peaks will be averaged, and the median and mean of this average metric across datasets will be reported.
+```{r, averaged metrics full genome}
+pr.full.av <- subset(pr.full, peak_set %in% c("merged_peaks", "noncons_peaks")) 
+pr.full.av <- pr.full.av[,.(scores=mean(scores), 
+                            frac_pos=mean(frac_pos),
+                            FCE=mean(FCE),
+                          n=.N), 
+                       by=.(model, metric, comb, tf, context)]
+pr.full.av$peak_set <- "average_noncons_merged"
+pr.full <- rbind(pr.full, pr.full.av, fill=TRUE, use.names=TRUE)
+pr.full[,median_model:=median(scores), 
+       by=.(model, metric, peak_set)]
+pr.full[,median_auprc_comb:=median(scores), 
+       by=.(comb, metric, peak_set)]
+```
+
+
+```{r, rank plot full genome}
+pr.full.base <- subset(pr.full, !grepl(".extended", model, fixed=TRUE) & 
+                              model %in% modelBase)
+pr.full.base[,model_type:=fifelse(model %in% c("TFBlearner.full", 
+                                              "TFBlearner.basic",
+                                              "maxATAC.default",
+                                              "maxATAC.100"), 
+                                "Supervised method",
+                                "Baseline scores")]
+pr.full.base[,model_type:=fifelse(model=="BMO", "Motif match-based method", model_type)]
+pr.full.base[,model_type:=fifelse(model=="TOP", "Supervised & motif match-based method", model_type)]
+
+pr.full.base.aucpr <- subset(pr.full.base, metric=="AUPRC" & 
+                             peak_set=="average_noncons_merged")
+setorder(pr.full.base.aucpr, median_model)
+pr.full.base.aucpr[,model:=factor(model, 
+                              levels=unique(pr.full.base.aucpr$model), 
+                              ordered=TRUE)]
+pr.full.base.aucpr[,type:=fifelse(model %in% baselineScores, 
+                                 "Baseline scores", "Methods")]
+pbp.pr <- ggplot(pr.full.base.aucpr, aes(y=model, x=scores))+
+          labs(x="AUPRC", tags="A", y="Method", fill="Model type", 
+               #subtitle="Aggregated sets: AUCPR"
+               )+
+          geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
+          scale_fill_manual(values=modelTypeColors)+
+          scale_color_manual(values=c(methodColors, 
+                                      baselineColors))+
+          guides(colour = "none")+
+          #scale_x_discrete(guide = guide_axis(n.dodge=3))+
+          stat_summary(fun.x = mean, geom = "errorbar", 
+                       aes(xmax = ..x.., xmin = ..x..),
+                 width = .75, linetype = "dashed")+
+          theme_sleek()+
+          theme(axis.title.y=element_blank(), 
+                legend.position="bottom")
+          #theme(legend.position="right",
+          #      legend.margin=margin(-5,-5,-5,-5),
+          #      legend.box.margin=margin(-5,-5,-5,-5))
+pbp.pr
+
+pr.full.base.ppv0.05 <- subset(pr.full.base, metric=="PPV.0.05" & 
+                                           peak_set=="average_noncons_merged")
+setorder(pr.full.base.ppv0.05, median_model)
+pr.full.base.ppv0.05[,model:=factor(model, 
+                                   levels=unique(pr.full.base.ppv0.05$model), 
+                                   ordered=TRUE)]
+pr.full.base.ppv0.05[,type:=fifelse(model %in% baselineScores, 
+                                  "Baseline scores", "Methods")]
+pbp.prec0.05 <- ggplot(pr.full.base.ppv0.05, aes(y=model, x=scores))+
+                labs(x="Precision at 5% Recall", 
+                     tags="C", y="Method", fill="Model type",
+                     #subtitle="Aggregated sets: Precision at 5% Recall"
+                     )+
+                geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
+                scale_fill_manual(values=modelTypeColors)+
+                scale_color_manual(values=c(methodColors, 
+                                             baselineColors))+
+                guides(colour = "none")+
+                stat_summary(fun.x = mean, geom = "errorbar", 
+                             aes(xmax = ..x.., xmin = ..x..),
+                             width = .75, linetype = "dashed")+
+                theme_sleek()+
+                 theme(axis.title.y=element_blank(), 
+                       legend.position="bottom")
+pbp.prec0.05
+
+pr.full.base.ppv0.1 <- subset(pr.full.base, metric=="PPV.0.1" & 
+                                          peak_set=="average_noncons_merged")
+setorder(pr.full.base.ppv0.1, median_model)
+pr.full.base.ppv0.1[,model:=factor(model, 
+                                   levels=unique(pr.full.base.ppv0.1$model), 
+                                   ordered=TRUE)]
+pr.full.base.ppv0.1[,type:=fifelse(model %in% baselineScores, 
+                                  "Baseline scores", "Methods")]
+pbp.prec0.1 <- ggplot(pr.full.base.ppv0.1, aes(y=model, x=scores))+
+                labs(x="Precision at 10% Recall", tags="D", y="Method",
+                     #subtitle="Aggregated sets: Precision at 10% Recall",
+                     fill="Model type")+
+                geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
+                scale_fill_manual(values=modelTypeColors)+
+                scale_color_manual(values=c(methodColors, 
+                                             baselineColors))+
+                guides(colour = "none")+
+                #geom_text(x=median(pr.0.1.dhs.baseline$average_noncons_merged)-0.025,
+                #          label="ChIP-seq nearest cellular context", 
+                #          y="cScore", angle = 90)+
+                stat_summary(fun.x = mean, geom = "errorbar", 
+                             aes(xmax = ..x.., xmin = ..x..),
+                             width = .75, linetype = "dashed")+
+                theme_sleek()+
+                 theme(axis.title.y=element_blank(),
+                       legend.position="bottom")
+pbp.prec0.1
+
+
+pr.full.base.fce <- subset(pr.full.base, metric=="AUPRC" & 
+                            peak_set=="average_noncons_merged")
+pr.full.base.fce[,median_fce_model:=median(FCE), by=model]
+setorder(pr.full.base.fce, median_fce_model)
+pr.full.base.fce[,model:=factor(model, 
+                               levels=unique(pr.full.base.fce$model), 
+                               ordered=TRUE)]
+pr.full.base.fce[,type:=fifelse(model %in% baselineScores, 
+                                 "Baseline scores", "Methods")]
+pbp.fce <- ggplot(pr.full.base.fce, aes(y=model, x=FCE))+
+                 labs(x="Enrichment over random", 
+                      tags="B", y="Method", color=NULL, 
+                      #subtitle="Aggregated sets: Enrichment over random",
+                      fill="Model type")+
+                 geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
+                 scale_color_manual(values=c(methodColors, 
+                                             baselineColors))+
+                 guides(colour = "none")+
+                 scale_fill_manual(values=modelTypeColors)+
+                 stat_summary(fun.x = mean, geom = "errorbar", 
+                              aes(xmax = ..x.., xmin = ..x..),
+                              width = .75, linetype = "dashed")+
+                 scale_x_log10()+
+                 theme_sleek()+
+                 theme(axis.title.y=element_blank(),
+                       legend.position="bottom")
+(pbp.pr + pbp.prec0.05)  /  
+guide_area() /  
+(pbp.fce  + pbp.prec0.1)+plot_layout(widths=c(1,1,2), 
+                                                   heights=c(1,0.05,1),
+                                                   guides="collect", 
+                                                   axes="collect")
+ggsave("main_perf_full_genome.pdf", units="cm", 
+       width=35, height=20, dpi=150)
+``` 
+
+```{r, overall heatmap full genome}
+pr.full.base <- subset(pr.full.base, peak_set!="average_noncons_merged")
+pr.full.base[,`Peak Set`:=as.character(peak_set)]
+pr.full.base[,`Peak Set`:=fifelse(`Peak Set`=="merged_peaks", "Merged", 
+                                 `Peak Set`)]
+pr.full.base[,`Peak Set`:=fifelse(`Peak Set`=="noncons_peaks", "IDR-thresh.", 
+                                 `Peak Set`)]
+pr.full.base[,`Peak Set`:=fifelse(`Peak Set`=="unamb_peaks", "Unambigious", 
+                                 `Peak Set`)]
+pr.full.base[,`Peak Set`:=fifelse(`Peak Set`=="noncrowded_peaks", "Non-crowded", 
+                                 `Peak Set`)]
+pr.full.base[,`Peak Set`:=fifelse(`Peak Set`=="nonmotif_peaks", "No motif", 
+                                 `Peak Set`)]
+pr.full.base[,`Peak Set`:=fifelse(`Peak Set`=="notrain_peaks", "Not in train", 
+                                 `Peak Set`)]
+pr.full.base[,`Peak Set`:=factor(pr.full.base$`Peak Set`,
+                               levels=c("Merged", "IDR-thresh.",
+                                        "Unambigious", "Non-crowded", 
+                                        "No motif", "Not in train"), 
+                               ordered=TRUE)]
+
+setorder(pr.full.base, median_auprc_comb)
+pr.full.base[,comb:=factor(comb, levels=unique(pr.full.base$comb), 
+                          ordered=TRUE)]
+setorder(pr.full.base, median_model)
+pr.full.base[,model:=factor(model, levels=unique(pr.full.base$model), 
+                            ordered=TRUE)]
+pr.full.base[,color_flag:=fifelse(scores>mean(pr.full.base$scores), TRUE, FALSE)]
+p.hp.full.auprc.full <- ggplot(subset(pr.full.base, metric=="AUPRC" & 
+                                                    model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=scores))+
+geom_tile()+
+geom_text(aes(label=round(scores,2), color=color_flag), size=8)+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
+scale_fill_viridis(option="B")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="AUPRC")+
+theme_sleek()+
+theme(axis.text.x=element_text(size=18),
+      axis.text.y=element_text(size=18),
+      strip.text=element_text(size=20),
+      legend.title=element_text(size=18), 
+      legend.text=element_text(size=18))
+p.hp.full.auprc.full
+ggsave("supplementary_full_matrix_aucpr_full.pdf", 
+       units="cm", width=52, height=55, dpi=150)
+
+p.hp.full.ppv0.05.full <- ggplot(subset(pr.full.base, metric=="PPV.0.05" & 
+                                            model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=scores))+
+geom_tile()+
+geom_text(aes(label=round(scores,2), color=color_flag), size=8)+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
+scale_fill_viridis(option="C")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="Precision at\n 5% Recall")+
+theme_sleek()+
+theme(axis.text.x=element_text(size=18),
+      axis.text.y=element_text(size=18),
+      strip.text=element_text(size=20),
+      legend.title=element_text(size=18), 
+      legend.text=element_text(size=18))
+p.hp.full.ppv0.05.full
+ggsave("supplementary_full_matrix_ppv0.05_full.pdf", units="cm", 
+       width=52, height=55, dpi=150)
+
+
+p.hp.full.ppv0.1.full <- ggplot(subset(pr.full.base, metric=="PPV.0.1" & 
+                                         model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=scores))+
+geom_tile()+
+geom_text(aes(label=round(scores,2), color=color_flag), size=8)+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
+scale_fill_viridis(option="A")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="Precision at\n 10% Recall")+
+theme_sleek()+
+theme(axis.text.x=element_text(size=18),
+      axis.text.y=element_text(size=18),
+      strip.text=element_text(size=20),
+      legend.title=element_text(size=18), 
+      legend.text=element_text(size=18))
+p.hp.full.ppv0.1.full
+ggsave("supplementary_full_matrix_ppv0.1_full.pdf", units="cm", 
+       width=52, height=55, dpi=150)
+
+p.hp.full.fce.full <- ggplot(subset(pr.full.base, metric=="AUPRC" & 
+                                    model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=FCE))+
+geom_tile()+
+geom_text(aes(label=round(FCE), color=color_flag), size=8)+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
+scale_fill_viridis(option="D", trans="log10")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="Enrichment over\nrandom")+
+theme_sleek()+
+theme(axis.text.x=element_text(size=18),
+      axis.text.y=element_text(size=18),
+      strip.text=element_text(size=20),
+      legend.title=element_text(size=18), 
+      legend.text=element_text(size=18))
+p.hp.full.fce.full
+ggsave("supplementary_full_matrix_fce_full.pdf", units="cm", 
+       width=52, height=55, dpi=150)
+
+p.hp.full.auprc.full <- ggplot(subset(pr.full.base, metric=="AUPRC" & 
+                                     model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=scores))+
+geom_tile()+
+geom_text(aes(label=round(scores,2), color=color_flag))+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, nrow=1)+
+scale_fill_viridis(option="B")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="AUPRC", tags="A")+
+theme_sleek()
+
+p.hp.full.ppv0.05.full <- ggplot(subset(pr.full.base, metric=="PPV.0.05" & 
+                                                    model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=scores))+
+geom_tile()+
+geom_text(aes(label=round(scores,2), color=color_flag))+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, nrow=1)+
+scale_fill_viridis(option="C")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="Precision at\n 5% Recall", tags="B")+
+theme_sleek()
+
+p.hp.full.ppv0.1.full <- ggplot(subset(pr.full.base, metric=="PPV.0.1" & 
+                                      model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=scores))+
+geom_tile()+
+geom_text(aes(label=round(scores,2), color=color_flag))+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, nrow=1)+
+scale_fill_viridis(option="A")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="Precision at\n 10% Recall", tags="C")+
+theme_sleek()
+p.hp.full.ppv0.1.dhs
+
+p.hp.full.fce.full <- ggplot(subset(pr.full.base, metric=="AUPRC" & 
+                                   model_type!="Baseline scores"), 
+       aes(x=model, y=comb, fill=FCE))+
+geom_tile()+
+geom_text(aes(label=round(FCE), color=color_flag))+
+          scale_colour_manual(values = c("white", "black"), 
+                              guide = "none") +
+#facet_grid(cols=vars(`Peak Set`))+
+facet_wrap(~`Peak Set`, nrow=1)+
+scale_fill_viridis(option="D", trans="log10")+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+labs(y="", x="", fill="Enrichment over\nrandom", tags="D")+
+theme_sleek()
+
+p.hp.full.auprc.full /
+p.hp.full.ppv0.05.full /
+p.hp.full.ppv0.1.full / 
+p.hp.full.fce.full
+ggsave("supplementary_full_matrix_combined_full.pdf", 
+       units="cm", width=50, height=70, dpi=150)
+```
+
+
+# Extended methods comparison
+
+TODO
+
+```{r}
+sessionInfo()
+```
