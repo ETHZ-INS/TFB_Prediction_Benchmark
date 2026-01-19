@@ -1,0 +1,313 @@
+---
+title: "Compute labels"
+output: html_document
+date: "2025-09-18"
+params: 
+  outPath:
+  methods:
+  maePath:
+  combsPath:
+  seed: 43
+  threads: 4
+---
+
+```{r setup, include=FALSE}
+library(TFBlearner)
+library(GenomicRanges)
+library(rtracklayer)
+library(ggplot2)
+source("utils.R")
+
+valChrs <- c("chr2", "chr4", "chr9")
+```
+
+# Load annot data
+
+```{r, import data}
+dhsCoords <- fread("../../data/annotation/dhs.bed", 
+                   col.names=c("chr", "start", "end"), 
+                   select=1:3)
+combinations <- fread("../../data/common/04_train_test_combinations.tsv")
+combinations[,comb:=paste(TF, CellularContext, sep="_")]
+testCombinations <- subset(combinations, set=="testData")
+trainCombinations <- subset(combinations, set=="trainData")
+
+dhsCoordsDt <- as.data.table(dhsCoords)
+dhsCoordsDt <- subset(dhsCoordsDt, chr %in% valChrs)
+dhsCoordsSub <- makeGRangesFromDataFrame(as.data.frame(dhsCoordsDt))
+```
+
+```{r, full ChIP-Matrix DHS}
+mae <- readRDS("../../data/TFBlearner/objects/additional_support_object/01_maeAddSupport.rds")
+
+chIpSubRanges <- subsetByOverlaps(rowRanges(mae[["ChIP"]]), dhsCoordsSub, type="equal")
+chIPSe <- mae[["ChIP"]][overlapsAny(rowRanges(mae[["ChIP"]]),
+                                    chIpSubRanges, type="equal"),]
+whichCol <- which(!(chIPSe[["combination"]] %in%
+                  subset(sampleMap(mae), get(TFBlearner:::ISTESTCOL) & 
+                                         assay==TFBlearner:::CHIPEXP)$colname))
+
+chIPMat <- TFBlearner:::.convertToMatrix(assays(chIPSe)$peaks[,whichCol])
+```
+
+## DHS
+
+```{r, get labels dhs}
+labels.dhs <- list()
+for(comb in unique(testCombinations$comb)){
+  
+  # high-confidence labels -----------------------------------------------------
+  hc.Labels <- fread(file.path("../../data/common/02_merged_chip_peaks",
+                      paste0("filtered_merged_peaks_", comb, ".bed")), 
+                      col.names=c("chr", "start", "end"))
+  hc.Labels$comb <- comb
+  hc.anyOv <- genomicRangesMapping(dhsCoordsSub, 
+                                   hc.Labels, 
+                                   byCols="comb")
+  
+  hc.Labels[,center:=floor((end-start)/2)+start]
+  hc.Labels[,start:=center-15]
+  hc.Labels[,end:=center+15]
+  hc.peakOv <- genomicRangesMapping(dhsCoordsSub, 
+                                    hc.Labels, 
+                                    byCols="comb")
+  
+  # non-cons peak labels -------------------------------------------------------
+  
+  nc.Labels <- fread(file.path("../../data/common/02_merged_chip_peaks",
+                     paste0("filtered_nonCons_peaks_", comb, ".bed")), 
+                     col.names=c("chr", "start", "end"))
+  nc.Labels$comb <- comb
+  nc.anyOv <- genomicRangesMapping(dhsCoordsSub, 
+                                   nc.Labels, 
+                                   byCols="comb")
+  
+  nc.Labels[,center:=floor((end-start)/2)+start]
+  nc.Labels[,start:=center-15]
+  nc.Labels[,end:=center+15]
+  nc.peakOv <- genomicRangesMapping(dhsCoordsSub, 
+                                    nc.Labels, 
+                                    byCols="comb")
+  
+  # merge labels ---------------------------------------------------------------
+  
+  labelDt <- data.table(hc.peak.ov=hc.peakOv[,1,drop=TRUE],
+                        hc.any.ov=hc.anyOv[,1,drop=TRUE], 
+                        nc.peak.ov=nc.peakOv[,1,drop=TRUE], 
+                        nc.any.ov=nc.anyOv[,1,drop=TRUE])
+  labelDt[,dhs_id:=1:.N]
+  
+  # add if site contains motif -------------------------------------------------
+  
+  tf <- unlist(tstrsplit(comb, split="_", keep=1))
+  mm <- fread(file.path("../../data/motifs/motif_matches_dhs/",
+              paste0(tf, ".bed")), 
+              col.names=c("chr", "start", "end"), select=1:3)
+  mm <- makeGRangesFromDataFrame(as.data.frame(mm))
+  labelDt$ov.motif <- overlapsAny(dhsCoordsSub, mm)
+
+  # if any peak in training data -----------------------------------------------
+  trainCombs <- subset(trainCombinations, TF==tf)$comb
+  trainPeaks <- lapply(trainCombs, function(comb){
+                       trainPeaks <- fread(file.path("../../data/common/02_merged_chip_peaks",
+                                           paste0("filtered_merged_peaks_", comb, ".bed")), 
+                                           col.names=c("chr", "start", "end"), select=1:3)  
+  })
+  trainPeaks <- makeGRangesFromDataFrame(as.data.frame(rbindlist(trainPeaks)))
+  labelDt$ov.trainPeak <- overlapsAny(dhsCoordsSub, trainPeaks)
+  
+  # add if is in all train -----------------------------------------------------
+  trainCombs <- subset(trainCombinations, TF==tf)$comb
+  ovTrainPeaks <- lapply(trainCombs, function(comb){
+                       trainPeaks <- fread(file.path("../../data/common/02_merged_chip_peaks",
+                                           paste0("filtered_nonCons_peaks_", comb, ".bed")), 
+                                           col.names=c("chr", "start", "end"), select=1:3)
+                       trainPeaks <- makeGRangesFromDataFrame(as.data.frame(trainPeaks))
+                       oc <- overlapsAny(dhsCoordsSub, trainPeaks)
+                       oc})
+  nCountOv <- Reduce("cbind", ovTrainPeaks[-1], ovTrainPeaks[[1]])
+  labelDt$ov.all.trainPeak <- fifelse(rowSums(nCountOv)==length(trainCombs), TRUE, FALSE)
+  
+  # add if is in at least two train --------------------------------------------
+  
+  labelDt$ov.2.trainPeak <- fifelse(rowSums(nCountOv)>=2, TRUE, FALSE)
+  
+  # add crowdedness information ------------------------------------------------
+  
+  chippedTfs <- unlist(tstrsplit(colnames(chIPMat), split="_", keep=2))
+  cScore <- TFBlearner:::.getCrowdedness(chIPMat[,chippedTfs!=tf])
+  cScore <- cScore[,1,drop=TRUE]
+  siteWidth <- width(chIpSubRanges)
+  totTFs <- length(unique(setdiff(chippedTfs, tf)))
+  cScore <- 200*(cScore/totTFs)/pmax(100L, siteWidth)
+  
+  q.99.cScore <- quantile(cScore, 0.99)
+  top.cScore <- which(cScore>q.99.cScore)
+  labelDt[,top.cScore:=fifelse(dhs_id %in% top.cScore, TRUE, FALSE)]
+  
+  # add coordinates and save ---------------------------------------------------
+  
+  labelDt <- cbind(labelDt, as.data.table(dhsCoordsSub))
+  labels.dhs[[comb]] <- labelDt
+}
+
+labels.dhs <- rbindlist(labels.dhs, idcol="comb")
+labels.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
+
+saveRDS(labels.dhs, "labels.dhs.rds")
+```
+
+## Full genome
+
+```{r, binning}
+# TODO: Remove blacklisted regions !!!
+blListRegions <- fread("../../data/annotation/blacklist.bed", 
+                       col.names=c("chr", "start", "end"))
+blListRegions <- makeGRangesFromDataFrame(as.data.frame(blListRegions))
+
+chrSizes <- fread("../../data/annotation/reChr.sizes", 
+                  col.names=c("chr", "length"))
+chrSizes <- subset(chrSizes, chr %in% valChrs)
+
+binDts <- lapply(split(chrSizes, by="chr"), function(chrSizeDt){
+  binDt <- data.table(start=seq(from=0, to=chrSizeDt$length, by=200))
+  binDt[,end:=start+199]
+  binDt$chr <- chrSizeDt$chr[[1]]
+  binDt
+})
+binDt <- rbindlist(binDts)
+binRanges <- makeGRangesFromDataFrame(as.data.frame(binDt))
+binRanges <- subsetByOverlaps(binRanges, blListRegions, invert=TRUE)
+write.table(as.data.table(binRanges), "fullChrBinRanges.bed", 
+            sep="\t", quote=FALSE, row.names=FALSE)
+```
+
+```{r, compute crowdedness}
+nonConsPeakFiles <- list.files("../../data/common/02_merged_chip_peaks", 
+                               pattern="filtered_nonCons_peaks_*", 
+                               full.names=TRUE)
+binCounts <- list()
+for(tf in unique(trainCombinations$TF)){
+  
+  allCombs <- subset(combinations, TF==tf)$comb
+  nonConsPeakFiles <- file.path("../../data/common/02_merged_chip_peaks", 
+                                paste0("filtered_nonCons_peaks_", 
+                                       allCombs, ".bed"))
+  peakRanges <- lapply(nonConsPeakFiles, fread)
+  peakRanges <- rbindlist(peakRanges)
+  colnames(peakRanges) <- c("chr", "start", "end")
+  peakRanges <- makeGRangesFromDataFrame(as.data.frame(peakRanges))
+  binCounts[[tf]] <- matrix(overlapsAny(binRanges, peakRanges), ncol=1)
+}
+binCounts <- Reduce("cbind", binCounts[-1], binCounts[[1]]) 
+colnames(binCounts) <- unique(trainCombinations$TF)
+saveRDS(binCounts, "fullChrBinOvs.rds")
+```
+
+```{r, get labels full chromosomes}
+labels.fullChr <- list()
+for(comb in unique(testCombinations$comb)){
+  
+  # high-confidence labels -----------------------------------------------------
+  hc.Labels <- fread(file.path("../../data/common/02_merged_chip_peaks",
+                      paste0("filtered_merged_peaks_", comb, ".bed")), 
+                      col.names=c("chr", "start", "end"))
+  hc.Labels$comb <- comb
+  hc.anyOv <- genomicRangesMapping(binRanges, 
+                                   hc.Labels, 
+                                   byCols="comb")
+  
+  hc.Labels[,center:=floor((end-start)/2)+start]
+  hc.Labels[,start:=center-15]
+  hc.Labels[,end:=center+15]
+  hc.peakOv <- genomicRangesMapping(binRanges, 
+                                    hc.Labels, 
+                                    byCols="comb")
+  
+  # non-cons peak labels -------------------------------------------------------
+  
+  nc.Labels <- fread(file.path("../../data/common/02_merged_chip_peaks",
+                     paste0("filtered_nonCons_peaks_", comb, ".bed")), 
+                     col.names=c("chr", "start", "end"))
+  nc.Labels$comb <- comb
+  nc.anyOv <- genomicRangesMapping(binRanges, 
+                                   nc.Labels, 
+                                   byCols="comb")
+  
+  nc.Labels[,center:=floor((end-start)/2)+start]
+  nc.Labels[,start:=center-15]
+  nc.Labels[,end:=center+15]
+  nc.peakOv <- genomicRangesMapping(binRanges, 
+                                    nc.Labels, 
+                                    byCols="comb")
+  
+  # merge labels ---------------------------------------------------------------
+  
+  labelDt <- data.table(hc.peak.ov=hc.peakOv[,1,drop=TRUE],
+                        hc.any.ov=hc.anyOv[,1,drop=TRUE], 
+                        nc.peak.ov=nc.peakOv[,1,drop=TRUE], 
+                        nc.any.ov=nc.anyOv[,1,drop=TRUE])
+  labelDt[,bin_id:=1:.N]
+  
+  # add if site contains motif -------------------------------------------------
+  
+  tf <- unlist(tstrsplit(comb, split="_", keep=1))
+  mm <- fread(file.path("../../data/motifs/motif_matches_genome/",
+              paste0(tf, ".bed")), 
+              col.names=c("chr", "start", "end"), select=1:3)
+  mm <- makeGRangesFromDataFrame(as.data.frame(mm))
+  labelDt$ov.motif <- overlapsAny(binRanges, mm)
+
+  # if any peak in training data -----------------------------------------------
+  
+  trainCombs <- subset(trainCombinations, TF==tf)$comb
+  trainPeaks <- lapply(trainCombs, function(comb){
+                       trainPeaks <- fread(file.path("../../data/common/02_merged_chip_peaks",
+                                           paste0("filtered_nonCons_peaks_", comb, ".bed")), 
+                                           col.names=c("chr", "start", "end"), select=1:3)  
+  })
+  trainPeaks <- makeGRangesFromDataFrame(as.data.frame(rbindlist(trainPeaks)))
+  labelDt$ov.trainPeak <- overlapsAny(binRanges, trainPeaks)
+  
+  # add if is in all train -----------------------------------------------------
+  
+  trainCombs <- subset(trainCombinations, TF==tf)$comb
+  ovTrainPeaks <- lapply(trainCombs, function(comb){
+                       trainPeaks <- fread(file.path("../../data/common/02_merged_chip_peaks",
+                                           paste0("filtered_nonCons_peaks_", comb, ".bed")), 
+                                           col.names=c("chr", "start", "end"), select=1:3)
+                       trainPeaks <- makeGRangesFromDataFrame(as.data.frame(trainPeaks))
+                       oc <- overlapsAny(binRanges, trainPeaks)
+                       oc})
+  nCountOv <- Reduce("cbind", ovTrainPeaks[-1], ovTrainPeaks[[1]])
+
+  labelDt$ov.all.trainPeak <- fifelse(rowSums(nCountOv)==length(trainCombs), TRUE, FALSE)
+  
+  # add if is in at least two train --------------------------------------------
+  
+  labelDt$ov.2.trainPeak <- fifelse(rowSums(nCountOv)>=2, TRUE, FALSE)
+  
+  # add if top crowed peak -----------------------------------------------------
+  
+  binSubCounts <- binCounts[,colnames(binCounts)!=tf]
+  colnames(binSubCounts) <- paste("any", colnames(binSubCounts), sep="_")
+  cScore <- TFBlearner:::.getCrowdedness(binSubCounts)
+  cScore <- cScore[,1,drop=TRUE]
+  q.99.cScore <- quantile(cScore, 0.99)
+  top.cScore <- which(cScore>q.99.cScore)
+  labelDt[,top.cScore:=fifelse(bin_id %in% top.cScore, TRUE, FALSE)]
+  
+  # add bin coordinates --------------------------------------------------------
+  
+  labelDt <- cbind(labelDt, as.data.table(binRanges))
+  labels.fullChr[[comb]] <- labelDt
+}
+labels.fullChr <- rbindlist(labels.fullChr, idcol="comb")
+labels.fullChr[,c("tf", "context"):=tstrsplit(comb, split="_")]
+
+saveRDS(labels.fullChr, "labels.fullChr.rds")
+```
+
+```{r, sessionInfo}
+library(sessioninfo)
+```
