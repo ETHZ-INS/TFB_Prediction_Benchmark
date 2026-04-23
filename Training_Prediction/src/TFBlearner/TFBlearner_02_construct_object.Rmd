@@ -1,0 +1,101 @@
+---
+title: "Construct Object TFBlearner"
+output: html_document
+date: "2025-03-13"
+params: 
+  outDir: "data/TFBlearner/objects"
+  combinationsPath: "combinations.tsv"
+  threads: 16
+---
+
+
+```{r setup, include=FALSE}
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(EnsDb.Hsapiens.v86)
+library(parallel)
+library(TFBlearner)
+library(data.table)
+library(GenomicRanges)
+library(BiocParallel)
+
+setDTthreads(as.integer(params$threads))
+```
+
+
+# Compile object
+
+```{r, determine training/testing combinations, error=TRUE}
+combinations <- fread(file.path("../..", params$combinationsPath))
+trainData <- subset(combinations, set=="trainData")
+testData <- subset(combinations, set=="testData")
+
+valContexts <- unique(testData$CellularContext)
+valContexts
+```
+
+```{r, load the data, error=TRUE}
+trainData[,comb:=paste(TF, CellularContext, sep="_")]
+trainCombs <- unique(trainData$comb)
+chIPData <- file.path("../../data/TFBlearner/chip_labels", 
+                      paste0("labels_", trainCombs, ".tsv"))
+names(chIPData) <- trainCombs
+
+atacData <- list.files("../../data/TFBlearner/atac_subsetted", full.names=TRUE, 
+                       pattern="*.bed")
+atacData <- atacData[grepl("subset_", atacData) & 
+                     !grepl("merged", atacData)]
+contexts <- gsub("subset_", "", basename(atacData))
+contexts <- gsub(".bed", "", contexts)
+names(atacData) <- contexts
+
+motifData <- list.files("../../data/TFBlearner/motifs", full.names=TRUE, 
+                        pattern="*.rds")
+motifNames <- gsub(".rds", "", basename(motifData))
+names(motifData) <- motifNames
+```
+
+```{r, load coordinates, error=TRUE}
+coords <- fread("../../data/annotation/dhs.bed", 
+                col.names=c("chr", "start", "end", "width", "strand"))
+coords <- makeGRangesFromDataFrame(as.data.frame(coords))
+
+edb <- EnsDb.Hsapiens.v86
+tfs <- unique(unlist(tstrsplit(names(chIPData), split="_", keep=2)))
+txCoords <- transcripts(edb, 
+                        columns=c("tx_seq_start"),
+                        filter=GeneNameFilter(tfs))
+end(txCoords) <- start(txCoords)+300
+start(txCoords) <- start(txCoords)-300
+txCoords <- as.data.table(txCoords)
+txCoords[,seqnames:=paste0("chr", seqnames)]
+setnames(txCoords, "gene_name", "tf_name")
+txCoords <- makeGRangesFromDataFrame(as.data.frame(txCoords), 
+                                     keep.extra.columns=TRUE)
+names(txCoords) <- txCoords$tx_id
+seqlevelsStyle(txCoords) <- "UCSC"
+txCoords <- keepStandardChromosomes(txCoords, pruning.mode="coarse")
+```
+
+```{r, construct object, error=TRUE}
+if(!dir.exists(file.path("../..", params$outDir))){
+  dir.create(file.path("../..", params$outDir))}
+mae <- prepData(refCoords=coords, 
+                motifData=motifData,
+                atacData=atacData,
+                chIPData=chIPData,
+                testSet=valContexts,
+                promoterCoords=txCoords,
+                weightCol="rep_prob",
+                isUncertainCol="is_uncertain",
+                scoreCol="score",
+                saveHdf5=TRUE,
+                shift=TRUE,
+                outDir=file.path("../..", params$outDir), 
+                BPPARAM=SerialParam())
+saveRDS(mae, file.path("../..", params$outDir, "01_mae.rds"))
+gc()
+```
+
+```{r, session info}
+sessionInfo()
+```

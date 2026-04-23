@@ -1,0 +1,27 @@
+FROM condaforge/mambaforge:latest
+
+RUN conda create -y -n bmo_base -c conda-forge -c bioconda r \
+      snakemake mamba git \
+      bedtools=2.* \
+      pysam \
+      perl=5.* \ 
+      unzip \
+      r-base=3.6* \
+      r-yaml \
+      r-mass \
+      r-optparse \ 
+      r-data.table \
+      r-fitdistrplus \
+      r-metap \
+      r-entropy \
+      r-tidyr \
+      r-dplyr \
+      r-ggplot2 \
+  && conda clean -afy
+
+ENV PATH="/opt/conda/envs/bmo_base/bin:${PATH}"
+
+RUN git clone https://github.com/ParkerLab/BMO.git /opt/BMO
+#RUN git clone --depth 1 --branch v1.0 https://github.com/ParkerLab/BMO.git /opt/BMO
+
+WORKDIR /opt/BMO

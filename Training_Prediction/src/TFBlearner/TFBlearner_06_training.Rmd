@@ -1,0 +1,71 @@
+---
+title: "Training TFBlearner"
+output: html_document
+date: "2025-03-13"
+params: 
+  outPath: "models"
+  outDir: "data"
+  tfName: "ATF3"
+  fmTrainPath: "fmTrainBasic.rds"
+  seed: 43
+  threads: 16
+---
+
+
+```{r setup, include=FALSE, error=TRUE}
+
+library(TFBlearner)
+library(data.table)
+library(GenomicRanges)
+library(BiocParallel)
+
+seed <- as.integer(params$seed)
+set.seed(seed)
+
+threads <- as.integer(params$threads)
+setDTthreads(threads)
+tfName <- params$tfName
+```
+
+```{r, parameters}
+evalRounds <- 100
+earlyStoppingRounds <- 10
+holdOutChrs <- c("chr9", "chr19")
+outPath <- params$outPath
+```
+
+# Training
+
+## Basic MultiAssayExperiment Object
+
+```{r, training - basic object, error=TRUE}
+fmTrain <- readRDS(params$fmTrainPath)
+if(!dir.exists(file.path("..", params$outDir))){
+  dir.create(file.path("..", params$outDir))}
+
+# subset to autosomes
+rangesFm <- rowRanges(fmTrain)
+rangeDt <- as.data.table(rangesFm)
+rangeDt[,row_id:=1:.N]
+
+trainInd <- subset(rangeDt, seqnames %in% paste0("chr", 1:22))$row_id
+trainRanges <- rangesFm[trainInd]
+fmSubTrain <- IRanges::subsetByOverlaps(fmTrain, trainRanges, type = "equal")
+
+mods <- trainTfModel(tfName=tfName, fm=fmSubTrain, 
+                     measureName="classif.aucpr", 
+                     stackingStrat="wMean",
+                     evalRounds=evalRounds, 
+                     loContext=TRUE,
+                     valChrs=holdOutChrs,
+                     earlyStoppingRounds=earlyStoppingRounds,
+                     seed=seed,
+                     numThreads=threads,
+                     BPPARAM=SerialParam())
+gc()
+saveModels(mods, filePath=file.path("..", outPath))
+```
+
+```{r, session info}
+sessionInfo()
+```

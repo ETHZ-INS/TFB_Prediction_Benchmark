@@ -1,0 +1,52 @@
+SEED = config["seed"]
+HOLDOUT = config["holdout"] 
+
+MODULE_PREFIX = config.get("module_prefix", "")
+def prefix_path(path):
+    import os
+    return os.path.join(MODULE_PREFIX, path) if MODULE_PREFIX else path
+
+'''
+rule compute_labels:
+  input:
+  params:
+  threads:
+  output:
+  shell:
+    """
+      Rscript -e 'rmarkdown::render("{params.script_path}",
+                                    "html_document",
+                                    output_file="{output.html}",
+                                    output_dir="{params.out_report_dir}",
+      
+    """
+'''
+
+rule compute_metrics:
+  input:
+    prediction_list="Training_Prediction/all_prediction_list.txt"
+  params:
+    script_path=prefix_path("src/performance_pr.Rmd"),
+    out_plot_dir=prefix_path("plots"),
+    out_report_dir=prefix_path("output"),
+    holdoutSet=HOLDOUT,
+    #maePath:
+    #combsPath=
+    seed=SEED
+  threads: 4
+  output:
+    html="output/performance_pr.html"
+  shell:
+    """
+      Rscript -e 'rmarkdown::render("{params.script_path}",
+                                    "html_document",
+                                    output_file="{output.html}",
+                                    output_dir="{params.out_report_dir}",
+                                    params=list(holdoutSet="{params.holdoutSet}",
+                                                outPath="{params.out_plot_dir}",
+                                                #maePath=,
+                                                #combsPath=,
+                                                seed={params.seed}))'
+    """
+
+

@@ -1,0 +1,5 @@
+docker buildx build --file ./Dockerfiles/Dockerfile_bmo   --tag tfbench-bmo:local   --build-arg http_proxy="$http_proxy"   --build-arg https_proxy="$https_proxy"   --build-arg no_proxy="$no_proxy"  --load  --network=host   .
+singularity build tfbench-bmo.sif docker-daemon://tfbench-bmo:local
+
+snakemake --until Common_get_matches_genome --touch --forceall --cores 1 --use-singularity
+snakemake --cores 16 --singularity-args "--bind $PWD:$PWD" --use-singularity

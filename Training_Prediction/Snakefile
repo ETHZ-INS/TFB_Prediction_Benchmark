@@ -1,0 +1,745 @@
+#!/usr/bin/env snakemake -s
+##
+## Benchmarking TF-Binding Prediction tools
+
+import os.path as op
+import pandas as pd
+import glob as glob
+
+from functools import partial
+
+os.makedirs('Training_Prediction/data/common', exist_ok=True)
+os.makedirs('Training_Prediction/output/preprocessing', exist_ok=True)
+
+#configfile: "config.yaml"
+
+SEED = config["seed"]
+METHODS =  ["TFBlearner"] # "TFBlearner"
+HOLDOUT = config["holdout"] 
+TFSUB = config["subset_tfs"]
+
+MODULE_PREFIX = config.get("module_prefix", "")
+def prefix_path(path):
+    import os
+    return os.path.join(MODULE_PREFIX, path) if MODULE_PREFIX else path
+
+VAL_CHRS = ["chr2", "chr4", "chr9"]
+AUT_CHRS = [f"chr{i}" for i in range(1, 23)]
+
+wildcard_constraints:
+    cellularContextEncode="(K562|HepG2|GM12878|MCF-7)"
+
+# OSF: Preregistered datasets
+TRAIN_DAT_URL = "https://osf.io/download/gfq6n"
+TEST_DAT_URL = "https://osf.io/download/vxmq3"
+
+PREREGISTERED_DATASETS = {
+    "trainData": TRAIN_DAT_URL,
+    "testData": TEST_DAT_URL
+}
+
+def get_accession_atac(wildcards):
+    checkpoint_output1 = checkpoints.common_create_encode_atac_placeholder_data.get().output[0]
+    checkpoint_output2 = checkpoints.common_get_encode_atac_ids.get().output[0]
+    
+    df = pd.read_csv(checkpoint_output2, sep="\t", 
+                     header=0,
+                     names=["accession", "output_type",
+                            "file_type",	"href",	
+                            "CellularContext",	"Exp_Accession",	
+                            "set"])
+    df = df[df["accession"].notna()]
+    accession = df["accession"].unique().tolist()
+
+    return accession
+  
+def get_accession_chip_peaks(wildcards):
+    checkpoint_output = checkpoints.common_get_encode_chip_peak_ids.get().output[0]
+
+    df = pd.read_csv(checkpoint_output, sep="\t", 
+                     header=0,
+                     names=["accession", "output_type",
+                            "file_type",	"href",	"peak_type", "TF",
+                            "CellularContext",	"Exp_Accession",	
+                            "set"])
+    df = df[df["accession"].notna()]
+    accession = df["accession"].unique().tolist()
+    
+    return accession
+  
+def get_accession_chip_coverage(wildcards):
+    checkpoint_output1 = checkpoints.common_create_encode_chip_coverage_placeholder_data.get().output[0]
+    checkpoint_output2 = checkpoints.common_get_encode_chip_coverage_ids.get().output[0]
+    
+    df = pd.read_csv(checkpoint_output2, sep="\t", 
+                     header=0,
+                     names=["Accession", "href", "TF", "CellularContext",
+                            "Exp_Accession",	"set",	
+                            "output_type",	"file_type"])
+    df = df[df["Accession"].notna()]
+    accession = df["Accession"].unique().tolist()
+    
+    return accession
+  
+def get_combs(wildcards):
+    checkpoint_output1 = checkpoints.common_merge_chip_peaks.get().output[0]
+    checkpoint_output = checkpoints.common_get_encode_chip_peak_ids.get().output[0]
+    df = pd.read_csv(checkpoint_output, sep="\t", 
+                     header=0,
+                     names=["accession", "output_type",
+                            "file_type",	"href",	"peak_type", "TF",
+                            "CellularContext",	"Exp_Accession",	
+                            "set"])
+                            
+    df["comb"] = df["TF"].astype("string").fillna("NA") + "_" + df["CellularContext"].astype("string").fillna("NA")
+    combs = df["comb"].unique()
+    
+    return combs
+    
+
+def get_accession_by_context(wildcards, fileDir, fileType, prefix=""):
+    #checkpoint_output1 = checkpoints.common_prepare_merge_encode_atac_bams.get().output[0]
+    checkpoint_output2 = checkpoints.common_get_encode_atac_ids.get().output[0]
+    df = pd.read_csv(checkpoint_output2, sep="\t", 
+                     header=0,
+                     names=["accession", "output_type",
+                            "file_type",	"href",	
+                            "CellularContext",	"Exp_Accession",	
+                            "set"])
+    df = df[df["accession"].notna()]
+    samples = df[df["CellularContext"] == wildcards.cellularContextEncode]["accession"].tolist()
+
+    files = [f"{fileDir}/{prefix}{sample}{fileType}" for sample in samples] 
+    return files
+  
+def get_cellularContexts(wildcards, which="all"):
+    #checkpoint_output1 = checkpoints.common_prepare_merge_encode_atac_bams.get().output[0]
+    checkpoint_output2 = checkpoints.common_get_encode_atac_ids.get().output[0]
+    df = pd.read_csv(checkpoint_output2, sep="\t")
+
+    if which=="encode":
+      df = df.dropna()
+    elif which=="nonEncode":
+      df = df[df['accession'].isna()]
+      
+    contexts = df["CellularContext"].unique().tolist()  
+      
+    return contexts
+  
+get_cellularContexts_all = partial(get_cellularContexts, which="all")
+get_cellularContexts_encode = partial(get_cellularContexts, which="encode")
+get_cellularContexts_nonencode = partial(get_cellularContexts, which="nonEncode")
+  
+ALL_TARGET_BUILDERS = [] 
+def final_targets(_):
+    ckpt1 = checkpoints.common_get_combinations.get()
+    combs = get_combs(None)
+    coverage_accessions = get_accession_chip_coverage(None)
+    contexts = get_cellularContexts_all(None)
+    
+    chip_coverage_files= [f"data/common/01_raw_chip_coverage/{acc}.bam" for acc in coverage_accessions]
+    chip_peaks= [f"data/common/02_merged_chip_peaks/filtered_merged_peaks_{comb}.bed" for comb in combs]
+    chip_peaks_signal=[f"data/common/02_merged_chip_peaks/filtered_merged_peaks_signal_{comb}.bed" for comb in combs]
+    chip_noncons_peaks=[f"data/common/02_merged_chip_peaks/filtered_nonCons_peaks_{comb}.bed" for comb in combs]
+    atac_peaks=[f"data/common/03_peaks_atac/filtered_merged_{context}_peaks.narrowPeak" for context in contexts]
+    
+    targets = [
+        "output/preprocessing/01_merging_replicate_peaks.html",
+        #"output/FIMO/01_motif_matches_DHS.html",
+        #"output/FIMO/01_motif_matches_all.html",
+        ckpt1.output.combinations,
+    ]
+    targets =  targets+chip_coverage_files+chip_peaks+chip_peaks_signal+chip_noncons_peaks+atac_peaks
+
+    for builder in ALL_TARGET_BUILDERS:
+        targets.extend(builder(ckpt1))
+    return targets
+  
+#rule all:
+#    input:
+#      final_targets
+
+# setting global limits for methods
+resource_scopes:
+  mem_mb="global",
+  runtime="global",
+  gpu="local" # only relevant for maxATAC with 100 epochs
+
+rule common_prereg_data:
+    input:
+        add_chip_data="data/annotation/ChIP_mapped.h5",
+        dhs_coords="data/annotation/dhs.bed"
+    output:
+        train_data_identifiers="data/common/prereg_trainData.csv",
+        test_data_identifiers="data/common/prereg_testData.csv"
+    params:
+        train_data_url=TRAIN_DAT_URL,
+        test_data_url=TEST_DAT_URL,
+    benchmark: "benchmarks/preprocessing/download_prereg_data.tsv"
+    log: "logs/preprocessing/prereg_data.log"
+    container: "tfbench-preproc.sif"
+    threads: 1
+    shell:
+        """
+          exec 2>>{log} 
+          wget --content-disposition -O "{output.train_data_identifiers}" "{params.train_data_url}"
+          wget --content-disposition -O "{output.test_data_identifiers}" "{params.test_data_url}"
+        """
+        
+checkpoint common_get_encode_chip_peak_ids:
+  input: 
+    train_data_identifiers=rules.common_prereg_data.output.train_data_identifiers,
+    test_data_identifiers=rules.common_prereg_data.output.test_data_identifiers
+  params:
+    tfs_sub=TFSUB
+  output:
+    downloaded_chip_peak_ids="data/common/01_encode_chip_peak_ids.tsv",
+  benchmark: "benchmarks/preprocessing/get_encode_chip_peak_ids.tsv"
+  log: "logs/preprocessing/get_encode_chip_peak_ids.log"
+  container: "tfbench-preproc.sif"
+  threads: 1
+  script: "src/preprocessing/get_encode_chip_peak_ids.R"
+
+# only needed for maxATAC training
+checkpoint common_get_encode_chip_coverage_ids:
+  input:
+    train_data_identifiers=rules.common_prereg_data.output.train_data_identifiers,
+  output:
+    downloaded_chip_coverage_ids="data/common/01_encode_chip_coverage_ids.tsv",
+  params:
+    tfs_sub=TFSUB
+  benchmark: "benchmarks/preprocessing/get_encode_chip_coverage_ids.tsv"
+  log: "logs/preprocessing/get_encode_chip_coverage_ids.log"
+  container: "tfbench-preproc.sif"
+  threads: 1
+  script: "src/preprocessing/get_encode_chip_coverage_ids.R"
+
+checkpoint common_get_encode_atac_ids:
+  input:
+    downloaded_chip_peak_ids="data/common/01_encode_chip_peak_ids.tsv"
+  output:
+    downloaded_atac_ids="data/common/01_encode_atac_ids.tsv",
+  benchmark: "benchmarks/preprocessing/get_encode_atac_ids.tsv"
+  log: "logs/preprocessing/get_encode_atac_ids.log"
+  container: "tfbench-preproc.sif"
+  threads: 1
+  script: "src/preprocessing/get_encode_atac_ids.R"
+  
+rule common_download_encode_chip_peaks:
+  input:
+    downloaded_chip_peak_ids="data/common/01_encode_chip_peak_ids.tsv"
+  output:
+    downloaded_chip_peaks="data/common/02_downloaded_raw_chip_peaks.tsv",
+  params:
+    raw_dir="data/common/01_raw_chip_peaks",
+  benchmark: "benchmarks/preprocessing/download_encode_chip_peaks.tsv"
+  log: "logs/preprocessing/download_encode_chip_peaks.log"
+  container: "tfbench-preproc.sif"
+  threads: 1
+  shell:
+    """
+      exec 2>>{log} 
+      mkdir -p {params.raw_dir}
+      cut -f1,4 "{input.downloaded_chip_peak_ids}" | tail -n +2 | while IFS=$'\t' read -r accession href; do
+        echo "processing: $href"
+        echo $href >> {output.downloaded_chip_peaks}
+        wget -O {params.raw_dir}/$accession.bed.gz "https://www.encodeproject.org/$href"
+      done
+    """
+    
+checkpoint common_create_encode_chip_coverage_placeholder_data:
+  input:
+    downloaded_chip_coverage_ids="data/common/01_encode_chip_coverage_ids.tsv",
+  output:
+    placeholder_chip_files_list="data/common/02_placeholder_encode_chip_coverage_files.tsv",
+  params: 
+    raw_dir="data/common/01_raw_chip_coverage",
+  benchmark: "benchmarks/preprocessing/chip_coverage_placeholder_data.tsv"
+  log: "logs/preprocessing/chip_coverage_placeholder_data.log"
+  container: "tfbench-preproc.sif"
+  threads: 1
+  shell:
+    """
+    exec 2>>{log} 
+    mkdir -p {params.raw_dir}
+    cut -f1,2,4 "{input.downloaded_chip_coverage_ids}" | tail -n +2 | while IFS=$'\t' read -r Accession href CellularContext; do
+      if [[ "$href" != "NA" ]]; then 
+        printf "%s\t%s\t%s\n" "$Accession" "$CellularContext" "$href" > {params.raw_dir}/"$Accession".tsv
+        printf "%s\t%s\t%s\n" "$Accession" "$CellularContext" "$href" >> {output.placeholder_chip_files_list}
+      fi
+    done
+    """
+    
+rule common_download_encode_chip_coverage:
+  input:
+     placeholder_list="data/common/02_placeholder_encode_chip_coverage_files.tsv",
+     placeholder_file="data/common/01_raw_chip_coverage/{accession}.tsv"
+  output: 
+    bam_file="data/common/01_raw_chip_coverage/{accession}.bam",
+    idxstats_file="data/common/01_raw_chip_coverage/{accession}.idxstats.txt"
+  params: 
+    raw_dir=rules.common_create_encode_chip_coverage_placeholder_data.params.raw_dir,
+  benchmark: "benchmarks/preprocessing/download_encode_chip_coverage_{accession}.tsv"
+  log: "logs/preprocessing/download_encode_chip_coverage_{accession}.log"
+  container: "tfbench-preproc.sif"
+  threads: 1
+  shell:
+    """
+      exec 2>>{log} 
+      IFS=$'\t' read -r accession _ href _ < {input.placeholder_file}
+      wget -O {params.raw_dir}/$accession.bam "https://www.encodeproject.org/$href"
+      
+      # index
+      samtools index -@ {threads} {output.bam_file}
+      # subset to autosomes
+      samtools view -b -o "data/common/01_raw_chip_coverage/filtered_{wildcards.accession}.bam" {output.bam_file} chr{{1..22}}
+      
+      # switch to original name
+      mv "data/common/01_raw_chip_coverage/filtered_{wildcards.accession}.bam" {output.bam_file}
+
+      # re-index
+      samtools index -@ {threads} {output.bam_file}
+      samtools idxstats -@ {threads} {output.bam_file} > {output.idxstats_file}
+    """
+    
+checkpoint common_merge_chip_peaks:
+  input:
+    downloaded_chip_peaks_ids=rules.common_get_encode_chip_peak_ids.output.downloaded_chip_peak_ids,
+    downloaded_chip_peaks=rules.common_download_encode_chip_peaks.output.downloaded_chip_peaks,
+  params:
+    merged_dir="data/common/02_merged_chip_peaks"
+  output:
+    html="output/preprocessing/01_merging_replicate_peaks.html",
+  benchmark: "benchmarks/preprocessing/merge_chip_peaks.tsv"
+  container: "tfbench-preproc.sif"
+  log: "logs/preprocessing/merge_chip_peaks.log"
+  threads: 16
+  shell:
+    """
+      exec 2>>{log} 
+      Rscript -e 'rmarkdown::render("src/preprocessing/01_merging_replicate_peaks.Rmd", 
+                                    "html_document", 
+                                     output_file="../../{output.html}",
+                                     params=list(meta_peaks_path="{input.downloaded_chip_peaks_ids}",
+                                                 raw_dir_peaks="{rules.common_download_encode_chip_peaks.params.raw_dir}",
+                                                 downloaded_peaks_list_path="{input.downloaded_chip_peaks}",
+                                                 out_dir_merged_peaks="{params.merged_dir}"))'
+    """
+
+rule common_remove_blacklisted_merged_chip_peaks:
+  input:
+    merging_report="output/preprocessing/01_merging_replicate_peaks.html",
+    peaks="data/common/02_merged_chip_peaks/merged_peaks_{comb}.bed"
+  output:
+    filtered_peaks="data/common/02_merged_chip_peaks/filtered_merged_peaks_{comb}.bed"
+  benchmark: "benchmarks/preprocessing/remove_blacklisted_merged_chip_peak_{comb}.tsv"
+  log: "logs/preprocessing/remove_blacklisted_merged_chip_peak_{comb}.log"
+  container: "tfbench-preproc.sif"
+  threads: 1
+  params:
+    peak_dir="Training_Prediction/data/common/02_merged_chip_peaks",
+    blacklist_path="Training_Prediction/data/annotation/blacklist.bed",
+  shell:
+    """
+      exec 2>>{log} 
+      bedtools intersect -v -a {params.peak_dir}/merged_peaks_{wildcards.comb}.bed \
+      -b {params.blacklist_path} > {params.peak_dir}/filtered_merged_peaks_{wildcards.comb}.bed
+    """
+
+rule common_remove_blacklisted_noncons_chip_peaks:
+  input:
+    merging_report="output/preprocessing/01_merging_replicate_peaks.html",
+    peaks="data/common/02_merged_chip_peaks/nonCons_peaks_{comb}.bed"
+  output:
+    filtered_peaks="data/common/02_merged_chip_peaks/filtered_nonCons_peaks_{comb}.bed",
+  benchmark: "benchmarks/preprocessing/remove_blacklisted_noncons_chip_peaks_{comb}.tsv"
+  log: "logs/preprocessing/remove_blacklisted_noncons_chip_peaks_{comb}.log"
+  container: "tfbench-preproc.sif"
+  threads: 1
+  params:
+    peak_dir="Training_Prediction/data/common/02_merged_chip_peaks",
+    blacklist_path="Training_Prediction/data/annotation/blacklist.bed",
+  shell:
+    """
+      exec 2>>{log} 
+      bedtools intersect -v -a {params.peak_dir}/nonCons_peaks_{wildcards.comb}.bed \
+      -b {params.blacklist_path} > {params.peak_dir}/filtered_nonCons_peaks_{wildcards.comb}.bed
+    """   
+
+rule common_remove_blacklisted_signal_chip_peaks:
+  input:
+    merging_report="output/preprocessing/01_merging_replicate_peaks.html",
+    peaks="data/common/02_merged_chip_peaks/merged_peaks_signal_{comb}.bed"
+  output:
+    filtered_peaks="data/common/02_merged_chip_peaks/filtered_signal_merged_peaks_{comb}.bed",
+  benchmark: "benchmarks/preprocessing/remove_blacklisted_signal_chip_peaks_{comb}.tsv"
+  log: "logs/preprocessing/remove_blacklisted_signal_chip_peaks_{comb}.log"
+  container: "tfbench-preproc.sif"
+  threads: 1
+  params:
+    peak_dir="data/common/02_merged_chip_peaks",
+    blacklist_path="data/annotation/blacklist.bed",
+  shell:
+    """
+      exec 2>>{log} 
+      bedtools intersect -v -a {params.peak_dir}/merged_peaks_signal_{wildcards.comb}.bed \
+      -b {params.blacklist_path} > {params.peak_dir}/filtered_signal_merged_peaks_{wildcards.comb}.bed
+    """   
+
+# to enable downstream download in parallel
+checkpoint common_create_encode_atac_placeholder_data:
+  input:
+    downloaded_atac_file_ids="data/common/01_encode_atac_ids.tsv",
+  output:
+    placeholder_atac_files_list="data/common/02_placeholder_encode_atac_files.tsv",
+  params:
+    raw_dir="data/common/01_raw_atac"
+  benchmark: "benchmarks/preprocessing/create_encode_atac_placeholder_data.tsv"
+  log: "logs/preprocessing/create_encode_atac_placeholder_data.log"
+  threads: 1
+  container: "tfbench-preproc.sif"
+  shell: 
+    """
+      exec 2>>{log} 
+      mkdir -p {params.raw_dir}
+      cut -f1,4,5 "{input.downloaded_atac_file_ids}" | tail -n +2 | while IFS=$'\t' read -r accession href CellularContext; do
+        if [[ "$href" != "NA" ]]; then 
+          printf "%s\t%s\t%s\n" "$accession" "$CellularContext" "$href" > {params.raw_dir}/"$accession".tsv
+          printf "%s\t%s\t%s\n" "$accession" "$CellularContext" "$href" >> {output.placeholder_atac_files_list}
+        fi
+      done
+    """
+    
+def atac_placeholder_tsv(wc):
+    checkpoints.common_create_encode_atac_placeholder_data.get()
+    return f"data/common/01_raw_atac/{wc.accession}.tsv"
+  
+rule common_download_encode_atac_data:
+  input:
+    placeholder_file=atac_placeholder_tsv 
+  output:
+     bam_file="data/common/01_raw_atac/{accession}.bam",
+     idxstats_file="data/common/01_raw_atac/{accession}.idxstats.txt"
+  params:
+    raw_dir="data/common/01_raw_atac"
+  benchmark: "benchmarks/preprocessing/download_encode_atac_data_{accession}.tsv"
+  log: "logs/preprocessing/download_encode_atac_data_{accession}.log"
+  container: "tfbench-preproc.sif"
+  threads: 1
+  shell:
+    """
+      exec 2>>{log} 
+      IFS=$'\t' read -r accession _ href _ < {input.placeholder_file}
+      echo $accession
+      wget -O {params.raw_dir}/$accession.bam "https://www.encodeproject.org/$href"
+        
+      # index
+      samtools index -@ {threads} {output.bam_file}
+      # subset to autosomes
+      samtools view -b -o "data/common/01_raw_atac/filtered_{wildcards.accession}.bam" {output.bam_file} chr{{1..22}}
+      
+      # switch to original name
+      mv "data/common/01_raw_atac/filtered_{wildcards.accession}.bam" {output.bam_file}
+      
+      # re-index
+      samtools index -@ {threads} {output.bam_file}
+      samtools idxstats -@ {threads} {output.bam_file} > {output.idxstats_file}
+    """
+
+get_rawBam_by_context = partial(get_accession_by_context, 
+                                fileDir="data/common/01_raw_atac", 
+                                fileType=".bam")
+rule common_merge_encode_atac_bams:
+  input:
+    bam_files=get_rawBam_by_context,
+  output:
+    merged_atac_bam_files="data/common/02_merged_atac/merged_{cellularContextEncode}.bam"  #TODO: wrap in temp()
+  params:
+    merged_dir="data/common/02_merged_atac",
+  benchmark: "benchmarks/preprocessing/merge_encode_atac_bams_{cellularContextEncode}.tsv"
+  log: "logs/preprocessing/merge_encode_atac_bams_{cellularContextEncode}.log"
+  container: "tfbench-preproc.sif"
+  threads: 4
+  shell:
+    """
+      exec 2>>{log} 
+      echo {input.bam_files}
+      mkdir -p {params.merged_dir}
+      samtools merge -o {output.merged_atac_bam_files} {input.bam_files}
+    """
+    
+rule common_process_nonencode_atac_jurkat:
+  input:
+    downloaded_atac_file_ids="data/common/01_encode_atac_ids.tsv",
+  output:
+     proc_atac_jurkat="data/common/02_merged_atac/merged_Jurkat.bam",  #TODO: wrap in temp()
+  params:
+    index="data/annotation/BOWTIE2Index_chr/genome",
+    chr_sizes="data/annotation/reChr.sizes",
+    raw_dir="data/common/01_raw_atac_nonencode/jurkat",
+    out_dir="data/common/02_merged_atac"
+  threads: 4
+  benchmark: "benchmarks/preprocessing/process_nonencode_atac_jurkat.tsv"
+  log: "logs/preprocessing/process_nonencode_atac_jurkat.log"
+  container: "tfbench-preproc.sif"
+  shell:
+    """
+      exec 2>>{log} 
+      mkdir -p {params.raw_dir}
+      bash src/preprocessing/downloadFromSraRunTable.sh data/common/SraRunTable_Jurkat.csv {params.raw_dir}
+      bash src/preprocessing/analysis.sh {params.raw_dir} "data/annotation/truseqPE.fa" {params.out_dir} {params.index} {params.chr_sizes} "Jurkat"
+      cp data/common/02_merged_atac/merged_Jurkat.bam data/common/01_raw_atac/merged_Jurkat.bam
+    """
+    
+rule common_process_nonencode_atac_h1:
+  input:
+    downloaded_atac_file_ids="data/common/01_encode_atac_ids.tsv",
+  output:
+     proc_atac_jurkat="data/common/02_merged_atac/merged_H1.bam",  #TODO: wrap in temp()
+  params:
+    index="data/annotation/BOWTIE2Index_chr/genome",
+    chr_sizes="data/annotation/reChr.sizes",
+    raw_dir="data/common/01_raw_atac_nonencode/h1",
+    out_dir="data/common/02_merged_atac"
+  threads: 4
+  benchmark: "benchmarks/preprocessing/process_nonencode_atac_h1.tsv"
+  log: "logs/preprocessing/process_nonencode_atac_h1.log"
+  container: "tfbench-preproc.sif"
+  shell:
+    """
+      exec 2>>{log} 
+      mkdir -p {params.raw_dir}
+      bash src/preprocessing/downloadFromSraRunTable.sh data/common/SraRunTable_H1.csv {params.raw_dir}
+      bash src/preprocessing/analysis.sh {params.raw_dir} "data/annotation/truseqPE.fa" {params.out_dir} {params.index} {params.chr_sizes} "H1"
+      cp data/common/02_merged_atac/merged_H1.bam data/common/01_raw_atac/merged_H1.bam    
+    """    
+
+rule common_process_nonencode_atac_hela:
+  input:
+    downloaded_atac_file_ids="data/common/01_encode_atac_ids.tsv",
+  output:
+     proc_atac_jurkat="data/common/02_merged_atac/merged_HeLa-S3.bam", #TODO: wrap in temp()
+  params:
+    index="data/annotation/BOWTIE2Index_chr/genome",
+    chr_sizes="data/annotation/reChr.sizes",
+    raw_dir="data/common/01_raw_atac_nonencode/hela",
+    out_dir="data/common/02_merged_atac"
+  threads: 4
+  benchmark: "benchmarks/preprocessing/process_nonencode_atac_hela.tsv"
+  log: "logs/preprocessing/process_nonencode_atac_hela.log"
+  container: "tfbench-preproc.sif"
+  shell:
+    """
+      exec 2>>{log} 
+      mkdir -p {params.raw_dir}
+      bash src/preprocessing/downloadFromSraRunTable.sh data/common/SraRunTable_HeLa_S3.csv {params.raw_dir}
+      bash src/preprocessing/analysis.sh {params.raw_dir} "data/annotation/truseqPE.fa" {params.out_dir} {params.index} {params.chr_sizes} "HeLa-S3"
+      cp data/common/02_merged_atac/merged_HeLa-S3.bam data/common/01_raw_atac/merged_HeLa-S3.bam  
+    """    
+    
+ruleorder:
+  common_process_nonencode_atac_h1 > common_download_encode_atac_data  
+ruleorder:
+  common_process_nonencode_atac_hela > common_download_encode_atac_data 
+ruleorder:
+  common_process_nonencode_atac_jurkat > common_download_encode_atac_data 
+    
+rule common_clean_atac_data: 
+  input:
+    bam_file="data/common/02_merged_atac/merged_{cellularContext}.bam"
+  output:
+    bam_file="data/common/03_merged_cleaned_atac/merged_{cellularContext}.bam",
+    idxstats_file="data/common/03_merged_cleaned_atac/merged_{cellularContext}.idxstats.txt"
+  params:
+    out_dir="data/common/03_merged_cleaned_atac"
+  benchmark: "benchmarks/preprocessing/clean_atac_data_{cellularContext}.tsv"
+  log: "logs/preprocessing/clean_atac_data_{cellularContext}.log"
+  container: "tfbench-preproc.sif"
+  threads: 4
+  shell:
+    """
+      exec 2>>{log} 
+      mkdir -p {params.out_dir}
+      samtools sort -o {output.bam_file} {input.bam_file}
+      samtools index -@ {threads} {output.bam_file}
+      samtools idxstats -@ {threads} {output.bam_file} > {output.idxstats_file}
+    """
+    
+rule common_call_peaks_atac:
+  input:
+    bam_file="data/common/03_merged_cleaned_atac/merged_{cellularContext}.bam"
+  output:
+    peak_file="data/common/03_peaks_atac/merged_{cellularContext}_peaks.narrowPeak"
+  params:
+    peaks_dir="data/common/03_peaks_atac",
+    seed=SEED
+  benchmark: "benchmarks/preprocessing/call_peaks_atac_{cellularContext}.tsv"
+  log: "logs/preprocessing/call_peaks_atac_{cellularContext}.log"
+  threads: 4
+  container: "tfbench-preproc.sif"
+  shell: 
+    """
+      exec 2>>{log} 
+      mkdir -p {params.peaks_dir}
+      macs3 callpeak --outdir {params.peaks_dir} \
+      -f BAM \
+      -t {input.bam_file} \
+      -n merged_{wildcards.cellularContext} \
+      --seed {params.seed} \
+      --nomodel
+    """
+
+rule common_remove_blacklisted_atac_peaks:
+  input:
+    peaks=rules.common_call_peaks_atac.output.peak_file
+  output:
+    filtered_peaks="data/common/03_peaks_atac/filtered_merged_{cellularContext}_peaks.narrowPeak",
+  params:
+    blacklistPath="data/annotation/blacklist.bed"
+  threads: 4
+  benchmark: "benchmarks/preprocessing/remove_blacklisted_atac_peaks_{cellularContext}.tsv"
+  log: "logs/preprocessing/remove_blacklisted_atac_peaks_{cellularContext}.log"
+  container: "tfbench-preproc.sif"
+  shell:
+    """
+      exec 2>>{log} 
+      bedtools intersect -v \
+      -a {input.peaks} \
+      -b {params.blacklistPath} > {output.filtered_peaks}
+    """
+
+checkpoint common_get_combinations:
+  input:
+    downloaded_chip_peak_ids="data/common/01_encode_chip_peak_ids.tsv",
+    downloaded_chip_coverage_ids="data/common/01_encode_chip_coverage_ids.tsv",
+    downloaded_atac_ids="data/common/01_encode_atac_ids.tsv",
+    atac_peaks=lambda wildcards: expand("data/common/03_peaks_atac/filtered_merged_{cellularContext}_peaks.narrowPeak", 
+                                        cellularContext=get_cellularContexts_all(wildcards)),
+    chip_peaks=lambda wildcards: expand("data/common/02_merged_chip_peaks/filtered_merged_peaks_{comb}.bed", 
+                                        comb=get_combs(wildcards)),
+    chip_peaks_signal=lambda wildcards: expand("data/common/02_merged_chip_peaks/filtered_merged_peaks_signal_{comb}.bed", 
+                                               comb=get_combs(wildcards)),
+    chip_noncons_peaks=lambda wildcards: expand("data/common/02_merged_chip_peaks/filtered_nonCons_peaks_{comb}.bed", 
+                                                comb=get_combs(wildcards)),
+    chip_coverage_tracks=lambda wildcards: expand("data/common/01_raw_chip_coverage/{acc}.bam", 
+                                                  acc=get_accession_chip_coverage(wildcards)),
+  params:
+    holdout=HOLDOUT,
+  output:
+    combinations="data/common/04_train_test_combinations.tsv",
+    all_raw_atac="data/common/04_all_raw_atac.tsv"
+  benchmark: "benchmarks/preprocessing/get_combinations.tsv"
+  log: "logs/preprocessing/get_combinations.log"
+  threads: 1
+  container: "Training_Prediction/tfbench-preproc.sif"
+  script: "src/preprocessing/get_combinations.R"
+
+if "maxATAC" in METHODS:
+  include: op.join("rules", "maxATAC.smk") 
+  
+if "Catchitt" in METHODS:
+  include: op.join("rules", "Catchitt.smk") 
+
+if "BMO" in METHODS:
+  include: op.join("rules", "BMO.smk") 
+  
+if "TOP" in METHODS:
+  include: op.join("rules", "TOP.smk") 
+  
+if "TFBlearner" in METHODS:
+  include: op.join("rules", "TFBlearner.smk") 
+
+rule Common_get_matches_genome:
+  input:
+    combs="data/common/04_train_test_combinations.tsv", # redundant
+  output:
+    html="output/FIMO/01_motif_matches_all.html",
+  params:
+    script=prefix_path("src/FIMO/01_motif_matches.Rmd"),
+    motif_models=prefix_path("data/annotation/motif_models.rds"),
+    refPath=prefix_path("data/annotation/Homo_sapiens.GRCh38.dna.primary_assembly.fa"),
+    dhsPath="",
+    tfsSub=TFSUB,
+    fimo_out_dir=prefix_path("output/FIMO"),
+    out_dir=prefix_path("data/motifs/motif_matches_genome"),
+    thresh=0.0001,
+  container: "tfbench-preproc.sif"
+  benchmark: "benchmarks/preprocessing/get_matches_genome.tsv"
+  log: "logs/preprocessing/get_matches_genome.log"
+  threads: 4,
+  shell:
+    """
+        exec 2>>{log} 
+        mkdir -p "{params.fimo_out_dir}"
+        mkdir -p {params.out_dir}
+        export MEME_PATH="$(which fimo)"
+        Rscript -e 'rmarkdown::render("{params.script}", 
+                                      "html_document", 
+                                       output_file="../../{output.html}",
+                                       params=list(motif_models="{params.motif_models}",
+                                                   tfs="{params.tfsSub}",
+                                                   combs_dir="{input.combs}",
+                                                   refPath="{params.refPath}",
+                                                   dhsPath="{params.dhsPath}",
+                                                   outDir="{params.out_dir}",
+                                                   thresh="{params.thresh}"))'
+    """
+    
+rule Common_get_matches_dhs:
+  input:
+    combs="data/common/04_train_test_combinations.tsv",
+  output:
+    html="output/FIMO/01_motif_matches_DHS.html",
+  params:
+    script=prefix_path("src/FIMO/01_motif_matches.Rmd"),
+    motif_models=prefix_path("data/annotation/motif_models.rds"),
+    refPath=prefix_path("data/annotation/Homo_sapiens.GRCh38.dna.primary_assembly.fa"),
+    dhsPath=prefix_path("data/annotation/dhs.bed"),
+    tfsSub=TFSUB,
+    fimo_out_dir=prefix_path("output/FIMO"),
+    out_dir=prefix_path("data/motifs/motif_matches_dhs"),
+    thresh=0.01,
+  benchmark: "benchmarks/preprocessing/get_matches_dhs.tsv"
+  log: "logs/preprocessing/get_matches_dhs.log"
+  container: "tfbench-preproc.sif"
+  threads: 4,
+  shell:
+    """
+        exec 2>>{log} 
+        mkdir -p "{params.fimo_out_dir}"
+        mkdir -p {params.out_dir}
+        export MEME_PATH="$(which fimo)"
+        Rscript -e 'rmarkdown::render("{params.script}", 
+                                      "html_document", 
+                                       output_file="../../{output.html}",
+                                       params=list(motif_models="{params.motif_models}",
+                                                   tfs="{params.tfsSub}",
+                                                   combs_dir="{input.combs}",
+                                                   refPath="{params.refPath}",
+                                                   dhsPath="{params.dhsPath}",
+                                                   outDir="{params.out_dir}",
+                                                   thresh="{params.thresh}"))'
+    """
+    
+def all_prediction_files(wildcards):
+    ckpt = checkpoints.common_get_combinations.get()
+    files = []
+    for builder in ALL_TARGET_BUILDERS:
+        files.extend(builder(ckpt))
+    # preserve order while removing duplicates
+    return list(dict.fromkeys(files))
+
+rule common_export_prediction_paths:
+  input:
+    combinations=lambda wildcards: checkpoints.common_get_combinations.get().output.combinations,
+    predictions=all_prediction_files
+  output:
+    listfile="all_prediction_list.txt"
+  run:
+    print(os.getcwd())
+    print(f"Exporting prediction file path to {output}...")
+    pred_paths = [op.abspath(str(pred)) for pred in input.predictions]
+    with open(output.listfile, "w") as f:
+      if pred_paths:
+        f.write("\n".join(pred_paths) + "\n")
+

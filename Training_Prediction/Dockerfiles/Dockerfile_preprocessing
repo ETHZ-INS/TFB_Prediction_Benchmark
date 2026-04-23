@@ -1,0 +1,45 @@
+FROM condaforge/mambaforge:latest
+
+RUN conda config --set channel_priority strict
+
+RUN conda create -y -n tfbench -c conda-forge -c bioconda \
+    samtools \
+    bedtools \
+    curl \
+    python \
+    meme=5.5.5 \
+    bowtie2 \
+    wget \
+    picard \
+    trimmomatic \
+    sra-tools \ 
+    pigz \
+    gawk \
+    coreutils \
+    r-base \
+    r-rmarkdown \
+    r-tidyverse \
+    r-data.table \
+    r-ggplot2 \
+    r-r.utils \
+    r-matrix \
+    bioconductor-BSgenome \
+    bioconductor-memes \
+    bioconductor-biostrings \
+    bioconductor-GenomicAlignments \
+    bioconductor-Rsamtools \
+    bioconductor-biocparallel \
+    bioconductor-genomicranges \
+    bioconductor-rtracklayer \
+    bioconductor-s4vectors \
+    numpy \
+    cython \
+    pip \
+    setuptools \
+    wheel \
+    macs3 \
+    gcc_linux-64 \
+    gxx_linux-64 \
+    && conda clean -afy
+
+ENV PATH="/opt/conda/envs/tfbench/bin:${PATH}"

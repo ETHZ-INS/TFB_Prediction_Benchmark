@@ -1,0 +1,126 @@
+---
+title: "Prepare Feature Matrix TFBlearner"
+output: html_document
+date: "2025-03-13"
+params: 
+  outDir: "data"
+  tfName: "ATF3"
+  cofactorMapPath: "cofactorMap"
+  computeProfile: TRUE
+  profilesDir: "insertion_profiles"
+  maePath: "03_mae_context.rds"
+  seed: 43
+  threads: 16
+---
+
+
+```{r setup, include=FALSE, error=TRUE}
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(EnsDb.Hsapiens.v86)
+library(phastCons100way.UCSC.hg38)
+library(parallel)
+library(TFBlearner)
+library(data.table)
+library(GenomicRanges)
+library(BiocParallel)
+
+seed <- params$seed
+set.seed(seed)
+
+setDTthreads(as.integer(params$threads))
+tfName <- params$tfName
+```
+
+# Annotation data
+
+```{r, annotation data}
+mae <- readRDS(params$maePath)
+outDir <- params$outDir
+computeProfile <- params$computeProfile
+
+tfCofactors <- readRDS(params$cofactorMapPath)
+tfCofactors <- unique(tfCofactors[[tfName]])
+tfCofactors <- tfCofactors[!is.na(tfCofactors)]
+tfCofactors <- intersect(tfCofactors, colnames(experiments(mae)$Motifs))
+
+valContexts <- unique(subset(sampleMap(mae), isTesting)$primary)
+allContexts <- getContexts(mae, tfName=tfName, which="Both")
+trainingContexts <- setdiff(allContexts, valContexts)
+valTfContexts <- intersect(valContexts, allContexts)
+```
+
+# Training
+
+### Add TF- & TF-Context-Features
+
+```{r, tf-features}
+mae <- tfFeatures(mae, tfName=tfName,
+                  tfCofactors=tfCofactors,
+                  nPatterns=50)
+```
+
+```{r, context-tf-features, error=TRUE}
+profilePath <- file.path("../..", params$profilesDir, paste(tfName, "median.rds", sep="_"))
+
+if(computeProfile | !file.exists(profilePath)){
+  motifPath <- subset(colData(mae[[TFBlearner:::MOTIFEXP]]), 
+                      get(TFBlearner:::MOTIFNAMECOL)==tfName)$origin
+  baseDir <- metadata(colData(mae[[TFBlearner:::MOTIFEXP]]))[[TFBlearner:::BASEDIRCOL]]
+
+  motifRanges <- readRDS(file.path(baseDir, motifPath))
+  seqlevelsStyle(motifRanges) <- "UCSC"
+
+  atacFragFilePaths <- unlist(subset(colData(mae[[TFBlearner:::ATACEXP]]),
+                                     context %in% trainingContexts)$origin)
+  baseDir <- metadata(colData(mae[[TFBlearner:::ATACEXP]]))[[TFBlearner:::BASEDIRCOL]]
+  atacFragPaths <- file.path(baseDir, atacFragFilePaths)
+  names(atacFragPaths) <- names(atacFragFilePaths)
+
+  ins <- getInsertionProfiles(atacFragPaths, motifRanges)
+  profile <- list(ins$insertProfiles)
+  names(profile) <- tfName
+}else{
+  profile <- readRDS(profilePath)
+  profile <- list(profile)
+  names(profile) <- tfName 
+}
+
+mae <- contextTfFeatures(mae, tfName=tfName, 
+                         whichCol="All",
+                         addLabels=TRUE, 
+                         seed=seed,
+                         insertionProfile=profile)
+```
+
+### Compile Feature-Matrix
+
+```{r, feature matrix, error=TRUE}
+if(!dir.exists(outDir)) dir.create(outDir)
+fmTrain <- getFeatureMatrix(mae, tfName=tfName, 
+                            whichCol="OnlyTrain", 
+                            addLabels=TRUE, 
+                            outDir=outDir,
+                            norm="robust", 
+                            prefix="train",
+                            saveHdf5=TRUE,
+                            convertInteger=FALSE)
+base::saveRDS(fmTrain, file.path(outDir, 
+                                 paste(tfName, "fmTrainSe.rds", sep="_")))
+
+fmTest <- getFeatureMatrix(mae, tfName=tfName, 
+                           whichCol="Col", 
+                           colSel=valTfContexts,
+                           addLabels=TRUE, 
+                           outDir=outDir,
+                           norm="robust",
+                           prefix="test",
+                           saveHdf5=TRUE,
+                           convertInteger=FALSE)
+
+base::saveRDS(fmTest, file.path(outDir, 
+                                paste(tfName, "fmTestSe.rds", sep="_")))
+```
+
+```{r, session info}
+sessionInfo()
+```

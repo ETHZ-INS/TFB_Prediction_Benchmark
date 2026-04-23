@@ -1,0 +1,35 @@
+FROM condaforge/mambaforge:latest
+
+RUN conda config --set channel_priority strict
+
+RUN conda create -y -n tfbench -c conda-forge -c bioconda \
+    samtools=1.23 \
+    bedtools=2.31.1 \
+    curl=8.18.0 \
+    python=3.9 \
+    meme=4.11.2 \
+    bowtie2=2.5.4 \
+    wget=1.21.4 \
+    picard=3.4.0 \
+    trimmomatic=0.40 \
+    sra-tools=3.2.1 \ 
+    pigz=2.8 \
+    gawk=5.2.2 \
+    coreutils=9.4 \
+    r-base=4.4.2 \
+    r-rmarkdown=2.30 \
+    r-tidyverse=2.0.0 \
+    r-data.table=1.17.8 \
+    bioconductor-genomicranges=1.58.0 \
+    bioconductor-rtracklayer=1.66 \
+    cython=3.2.4 \
+    numpy=2.2.6 \
+    pip=25.3 \
+    setuptools \
+    wheel \
+    gcc_linux-64 \
+    gxx_linux-64 \
+    && conda clean -afy
+    
+ENV PATH="/opt/conda/envs/tfbench/bin:${PATH}"
+RUN /bin/bash -lc "conda run -n tfbench pip install --no-build-isolation --no-binary :all: MACS2==2.2.9.1"

@@ -1,0 +1,82 @@
+---
+title: "Site-Features TFBlearner"
+output: html_document
+date: "2025-03-13"
+params: 
+  outPath: "data/02_TFBlearner_object/mae_site.rds"
+  outDir: "data/02_TFBlearner_object"
+  maePath: "01_mae.rds"
+  footprintPath: "footprint.tsv"
+  embPath: "embeddings.rds"
+  threads: 16
+---
+
+
+```{r setup, include=FALSE, error=TRUE}
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(EnsDb.Hsapiens.v86)
+library(phastCons100way.UCSC.hg38)
+library(parallel)
+library(TFBlearner)
+library(data.table)
+library(GenomicRanges)
+library(BiocParallel)
+
+setDTthreads(as.integer(params$threads))
+```
+
+# Add Site-Features
+
+## Load annotation data
+
+```{r, load basic object, error=TRUE}
+mae <- readRDS(params$maePath)
+```
+
+```{r, load annotation data, error=TRUE}
+fpPath <- params$footprintPath
+embPath <- params$embPath
+outDir <- params$outDir
+if(!dir.exists(outDir)) dir.create(outDir)
+
+fpData <- fread(fpPath, select=c(1:3,5), 
+                col.names=c("chr", "start", "end", "mean_signal"))
+emb <- readRDS(embPath)
+colnames(emb) <- paste("Embed", 1:ncol(emb), sep="_")
+embDts <- lapply(colnames(emb), function(col){
+  embDt <- as.data.table(emb[,col], keep.rownames=TRUE)
+  setnames(embDt, "V2", "score")
+  embDt[,c("chr", "coord"):=tstrsplit(V1, split=":")]
+  embDt[,c("start", "end"):=tstrsplit(coord, split="-", type.convert=TRUE)]
+  embDt$V1 <- NULL
+  embDt
+  })
+names(embDts) <- colnames(emb)
+annoData <- append(embDts, list("footprint_score"=fpData))
+```
+
+```{r, load distance to nearest TSS, error=TRUE}
+coords <- rowRanges(mae[["ATAC"]])
+tss <- GenomicRanges::GPos(seqnames=seqnames(rowRanges(mae[["ATAC.Promoters"]])),
+                           pos=mid(rowRanges(mae[["ATAC.Promoters"]])))
+distToTss <- GenomicRanges::distanceToNearest(coords, tss, ignore.strand=TRUE)
+distDt <- as.data.table(coords[queryHits(distToTss)])
+distDt$distTSS <- distToTss@elementMetadata$distance
+
+annoData <- append(annoData, list("distTSS"=distDt))
+```
+
+## Compute site features
+
+```{r, compute site-features, error=TRUE}
+mae <- siteFeatures(mae, annoData=annoData, 
+                    scoreCols=c(rep("score", length(embDts)), 
+                                    "mean_signal", "distTSS"), 
+                    minoverlap=1, shift=FALSE)
+
+saveRDS(mae, file.path("..", params$outPath))
+```
+
+```{r, session info}
+sessionInfo()
+```

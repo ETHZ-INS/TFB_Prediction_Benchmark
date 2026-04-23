@@ -1,0 +1,54 @@
+---
+title: "Motif Processing TFBlearner"
+output: html_document
+date: "2025-03-13"
+params: 
+  outDir: "data/02_TFBlearner_object"
+  motifModelsPath: "data/motifs/motif_models.rds"
+  dhsPath: "data/annotation/dhs.rds"
+  genomeFaPath: "data/annotation/Homo_sapiens.GRCh38.dna.primary_assembly.chr.fa"
+  threads: 16
+---
+
+
+```{r setup, include=FALSE}
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(Rsamtools)
+library(TFBlearner)
+library(data.table)
+library(GenomicRanges)
+library(BiocParallel)
+library(universalmotif)
+library(TFBSTools)
+
+setDTthreads(as.integer(params$threads))
+```
+
+```{r, input data}
+dhsCoords <- fread(file.path("../..", params$dhsPath), 
+                   col.names=c("chr", "start", "end", "width", "strand"))
+dhsCoords <- makeGRangesFromDataFrame(as.data.frame(dhsCoords))
+
+
+motifModels <- readRDS(file.path("../..", params$motifModelsPath))
+outDir <- file.path("../..", params$outDir)
+fa <- FaFile(file.path("../..", params$genomeFaPath))
+```
+
+# Motifs preprocessing
+
+```{r, motif processing, error=TRUE}
+mm <- convert_motifs(motifModels, "TFBSTools-PFMatrix")
+mms <- lapply(mm, toPWM, type="prob")
+mms <- do.call(PWMatrixList, mms)
+TFBlearner::prepMotifs(dhsCoords, 
+                       mms, 
+                       outputFolder=outDir,
+                       genome=fa,
+                       BPPARAM=SerialParam()) 
+```
+
+
+```{r, session info}
+sessionInfo()
+```

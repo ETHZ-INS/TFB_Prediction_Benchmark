@@ -1,0 +1,57 @@
+---
+title: "Preparing meta-data maxATAC"
+output: html_document
+date: "2025-03-13"
+params: 
+  outDir: "meta_data"
+  holdOut: "train"
+  combDir: "trainTestCombinations.tsv"
+---
+
+
+```{r setup, include=FALSE}
+library(data.table)
+```
+
+```{r, prepare data, error=TRUE}
+outDir <- file.path("../../..", params$outDir)
+combs <- fread(file.path("../../..", params$combDir))
+trainSetsDt <- subset(combs, set=="trainData")
+holdOut <- params$holdOut
+
+isCrossValOnTrain <- fifelse(unique(combs$crossValOn)=="train", TRUE, FALSE)
+```
+
+```{r, training, error=TRUE}
+if(!dir.exists(outDir)){ dir.create(outDir,  recursive=TRUE)}
+
+for(tf in unique(trainSetsDt$TF)){
+    trainRoundSets <- subset(trainSetsDt, TF==tf)
+    metaDt <- copy(trainRoundSets[,c("CellularContext","TF"), with=FALSE])
+    setnames(metaDt, "CellularContext", "Cell_Line")
+    
+    metaDt[,Cell_Line:=as.character(Cell_Line)]
+    metaDt[,ATAC_Signal_File:=file.path("data/maxATAC/03_normalized_atac", 
+                                        paste(Cell_Line, "minmax.bw", sep="_"))]
+    metaDt[,ATAC_Peaks:=file.path("data/common/03_peaks_atac", 
+                                          paste0("filtered_merged_", 
+                                                 paste(Cell_Line, "peaks", sep="_"),
+                                                 ".narrowPeak"))]
+    metaDt[,Binding_File:=file.path("data/maxATAC/03_normalized_chip", 
+                                    paste(tf, Cell_Line, "minmax.bw", sep="_"))]
+    metaDt[,CHIP_Peaks:=file.path("data/common/02_merged_chip_peaks",
+                                  paste0(paste("filtered_merged_peaks", 
+                                               tf, Cell_Line, sep="_"),".bed"))]
+    metaDt[,Train_Test_Label:="Train"]
+    metaDt <- metaDt[,c("Cell_Line", "TF", "ATAC_Signal_File", 
+                        "Binding_File", "ATAC_Peaks", "CHIP_Peaks", 
+                        "Train_Test_Label"), with=FALSE]
+
+    metaFilePath <- file.path(outDir, paste0(paste("maxATAC_meta", holdOut, tf, sep="_"), ".tsv"))
+    write.table(metaDt, file=metaFilePath, sep="\t", row.names=FALSE, quote=FALSE)
+}
+```
+
+```{r, session info}
+sessionInfo()
+```

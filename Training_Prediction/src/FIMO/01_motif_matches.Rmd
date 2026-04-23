@@ -1,0 +1,135 @@
+---
+title: "01 Motif matches"
+output: html_document
+date: "2025-03-04"
+params: 
+  motif_models: "data/motifs/motif_models.rds"
+  tfs: ""
+  combs_dir: "trainTestCombinations.tsv"
+  refPath: "data/annotation/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
+  dhsPath: "data/annotation/dhs.rds"
+  outDir: "data/motifs/motif_matches"
+  thresh: 0.0001
+---
+
+```{r}
+library(Biostrings)
+library(data.table)
+library(BSgenome)
+library(BiocParallel)
+library(memes)
+
+condaEnvPath <- file.path(Sys.getenv("CONDA_PREFIX"), "lib", "R", "library")
+.libPaths(condaEnvPath)
+```
+                
+```{r, prepare data}
+memePath <- gsub("/fimo", "", Sys.getenv("MEME_PATH"))
+tfsSub <- params$tfs
+tfsSub <- unlist(tstrsplit(tfsSub, split=" "))
+print(tfsSub)
+
+refPath <- file.path("../..", params$refPath)
+if(params$dhsPath!=""){
+  dhsPath <- file.path("../..", params$dhsPath)
+  searchFull <- FALSE
+}else{
+  searchFull <- TRUE
+}
+motifs = readRDS(file.path("../..", params$motif_models))
+
+if(length(intersect(tfsSub, names(motifs)))>0){
+  motifs <- motifs[tfsSub]
+}
+```
+
+```{r, define search space, error=TRUE}
+if(!searchFull){
+  #if(!file.exists('../data/annotation/dhs.fa')){
+  dhs <- fread(dhsPath, col.names=c("chr", "start", "end", "width", "strand"))
+  dhs <- makeGRangesFromDataFrame(as.data.frame(dhs))
+  seqlevelsStyle(dhs) <- "NCBI"
+  stringSet <- readDNAStringSet(refPath)
+  names(stringSet) <- unlist(tstrsplit(names(stringSet), split=" ", keep=1))
+  seq <- BSgenome::getSeq(stringSet, dhs)
+  names(seq) <- as.character(dhs)
+  #writeXStringSet(seq, '../data/annotation/dhs.fa')
+  #write.table(dhs@ranges, '../data/annotation/dhs.fa.fai', 
+  #            quote=FALSE, row.names=FALSE, col.names=FALSE, 
+  #            sep="\t")
+  #}
+  #seq <- '../data/annotation/dhs.fa'
+}else{
+  seq <- refPath
+}
+```
+
+```{r, run FIMO search, error=TRUE} 
+motifDt <- data.table(motif=names(motifs))
+combs <- fread(file.path("../..", params$combs_dir))
+allTfs <- unique(combs$TF)
+motifDt <- subset(motifDt, motif %in% allTfs)
+
+if(length(allTfs)>=16){
+  groups <- seq(1, nrow(motifDt), by=4)
+  motifDt[,group:=rep(groups, each=4)[1:nrow(motifDt)]]
+  BPPARAM <- MulticoreParam(workers=4)
+}else{
+  motifDt$group <- 1:nrow(motifDt)
+  BPPARAM <- SerialParam()
+}
+
+motifGroups <- split(motifDt, by="group")
+bplapply(motifGroups, function(mg){
+
+  outDir <- file.path("../..", params$outDir, unique(mg$group))
+  if(!dir.exists(outDir)) dir.create(outDir, recursive=TRUE)
+  
+  motifsSub <- motifs[names(motifs) %in% mg$motif]
+  runFimo(sequences=seq, 
+          motifs=motifsSub, 
+          outdir=outDir,
+          text=FALSE,
+          meme_path=memePath,
+          thresh=params$thresh,
+          parse_genomic_coord=TRUE,
+          max_stored_scores=2000000)
+
+   mm <- fread(file.path(outDir, "fimo.tsv"))
+   mm <- split(mm, by="motif_id")
+   outDirBed <-  file.path("../..", params$outDir)
+   lapply(names(mm), function(mot){
+     m <- mm[[mot]]
+     m[,sequence_name:=paste0("chr", sequence_name)]
+     m <- subset(m, sequence_name %in% paste0("chr", 1:22))
+     write.table(m, file.path(outDirBed, paste0(mot, "_fimo", ".tsv")),
+                 sep="\t", quote=FALSE, row.names=FALSE, col.names=TRUE)
+
+     m <- m[,c("sequence_name", "start", "stop", "motif_id", "score", "strand"), with=FALSE]
+     setnames(m, c("sequence_name", "stop"), c("chr", "end"))
+     write.table(m, file.path(outDirBed, paste0(mot, ".bed")),
+                 sep="\t", quote=FALSE, row.names=FALSE, col.names=FALSE)
+     
+     })
+   #file.remove(file.path(outDir, "fimo.tsv"))
+   #unlink(outDir, recursive = TRUE)
+  }, 
+  BPPARAM=BPPARAM)
+```
+
+```{r, merge all fimo outputs files, error=TRUE, eval=FALSE}
+fimoAll <- data.table()
+for(mg in motifGroups){
+  outDir <- file.path("../..", params$outDir, unique(mg$group))
+  mm <- fread(file.path(outDir, "fimo.tsv"))
+  fimoAll <- rbind(fimoAll, mm, use.names=TRUE, fill=TRUE)
+  file.remove(file.path(outDir, "fimo.tsv"))
+  unlink(outDir, recursive = TRUE)
+}
+write.table(fimoAll, file=file.path("../..", params$outDir, "fimo.tsv"), 
+                                    sep="\t", row.names=FALSE, quote=FALSE)
+```
+
+```{r, sessionInfo}
+sessionInfo()
+```

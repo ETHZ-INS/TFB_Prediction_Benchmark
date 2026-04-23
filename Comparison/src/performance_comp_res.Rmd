@@ -1,0 +1,992 @@
+---
+title: "Performance Comparison: computational resources"
+output: html_document
+date: "2025-09-18"
+---
+
+```{r setup, include=FALSE}
+library(TFBlearner)
+library(GenomicRanges)
+library(rtracklayer)
+library(ggplot2)
+library(ggh4x)
+library(patchwork)
+library(colorBlindness)
+source("../utils/plot_theme.R")
+
+holdoutSet <- "test"
+if(holdoutSet=="test"){
+  otherSet <- "train"
+}else{
+  otherSet <- "test"
+}
+
+preprocStepColors <- Brown2Blue10Steps
+names(preprocStepColors) <- NULL
+cbbPalette <- c("#E69F00", "#56B4E9", "#009E73", 
+                "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+modelTypeColors <- c("Baseline scores"="#525252",
+                     "Motif match-based method"="#C8C8C8",
+                     "Supervised & motif match-based method"="#EBEBEB",
+                     "Supervised method"="#FFFFFF")
+```
+
+## Data Preparation
+
+```{r, preprocessing: TFBlearner basic}
+prep.chip_labels <- list.files("../../benchmarks/TFBlearner", 
+                               pattern="chip_labels", 
+                               full.names=TRUE)
+prep.motif.files <- list.files("../../benchmarks/TFBlearner", 
+                               pattern="prep_process_motifs*",
+                               full.names=TRUE)
+prep.atac.files <- list.files("../../benchmarks/TFBlearner", 
+                               pattern="prep_subset_atac_data*",
+                               full.names=TRUE)
+prep.object <- file.path("../../benchmarks/TFBlearner", 
+                         paste0("prep_construct_object_", holdoutSet, ".tsv"))
+prep.site.features <- file.path("../../benchmarks/TFBlearner", 
+                                paste0("prep_site_features_", holdoutSet, ".tsv"))
+prep.context.features <- file.path("../../benchmarks/TFBlearner", 
+                                   paste0("prep_context_features_", holdoutSet, ".tsv"))
+prep.feature.matrices <- list.files("../../benchmarks/TFBlearner", 
+                                   pattern=paste0("prep_feature_matrix",
+                                                  "_.*_", holdoutSet, ".tsv"), 
+                                   full.names=TRUE)
+prep.files <- c(prep.chip_labels,
+                prep.motif.files, 
+                prep.atac.files, 
+                prep.object,
+                prep.site.features,
+                prep.context.features,
+                prep.feature.matrices)
+prep.TFBlearner.basic <- lapply(prep.files, function(pf){
+                                pfDt <- fread(pf)})
+names(prep.TFBlearner.basic) <- basename(prep.files)
+prep.TFBlearner.basic <- rbindlist(prep.TFBlearner.basic, idcol="file")
+prep.TFBlearner.basic[,step:=gsub(".tsv", "", file)]
+
+prep.TFBlearner.basic[,step_type:=fifelse(grepl("process_motif", step),
+                                         "process_motifs",step)]
+prep.TFBlearner.basic[,step_type:=fifelse(grepl("chip_labels", step),
+                                       "derive_chip_labels",step_type)]
+prep.TFBlearner.basic[,step_type:=fifelse(grepl("subset_atac_data", step),
+                                       "subset_atac_data",step_type)]
+prep.TFBlearner.basic[,step_type:=fifelse(grepl("construct", step),
+                                       "construct_object",step_type)]
+prep.TFBlearner.basic[,step_type:=fifelse(grepl("context_features", step),
+                                       "context_features",step_type)]
+prep.TFBlearner.basic[,step_type:=fifelse(grepl("site_features", step),
+                                       "site_features",step_type)]
+prep.TFBlearner.basic[,step_type:=fifelse(grepl("feature_matrix", step),
+                                       "feature_matrix",step_type)]
+prep.TFBlearner.basic[,rep_type:=fifelse(step_type=="feature_matrix",
+                                "per motif/TF", "once")]
+prep.TFBlearner.basic[,rep_type:=fifelse(step_type=="site_features",
+                                              "once", rep_type)]
+prep.TFBlearner.basic[,rep_type:=fifelse(step_type=="process_motifs",
+                                              "per motif/TF", rep_type)]
+prep.TFBlearner.basic[,rep_type:=fifelse(step_type=="construct_object",
+                                              "once", rep_type)]
+prep.TFBlearner.basic[,rep_type:=fifelse(step_type=="context_features",
+                                              "once", rep_type)]
+prep.TFBlearner.basic[,rep_type:=fifelse(step_type=="subset_atac_data",
+                                              "per cellular context", rep_type)]
+prep.TFBlearner.basic[,rep_type:=fifelse(step_type=="derive_chip_labels",
+                                "per TF x cellular context", rep_type)]
+prep.TFBlearner.basic$method <- "TFBlearner.basic"
+prep.TFBlearner.basic[,h:=s/3600]
+
+stepColors <- c("construct_object"="#990F0F",
+                "site_features"="#B22C2C",
+                "context_features"="#CC5151",
+                "subset_atac_data"="#6B990F",
+                "feature_matrix"="#0F6B99",
+                "process_motifs"="#7EC3E5",
+                "derive_chip_labels"="#8F7EE5")
+prep.TFBlearner.basic[, step_type:=factor(step_type, 
+                                          levels=names(stepColors),
+                                          ordered=TRUE)]
+prep.TFBlearner.basic[,rep_type:=factor(rep_type,
+                                        levels=c("once", "per cellular context",
+                                                 "per motif/TF", 
+                                                 "per TF x cellular context"))]
+setorder(prep.TFBlearner.basic, step_type)
+prep.TFBlearner.basic.agg <- prep.TFBlearner.basic[,.(sd_s=sd(s),
+                                                      mean_s=mean(s), 
+                                                      sd_h=sd(h), 
+                                                      sd_max_rss=sd(max_rss),
+                                                      mean_max_rss=mean(max_rss),
+                                                      max_max_rss=max(max_rss),
+                                                      mean_h=mean(h)), 
+                                by=.(step_type, rep_type, method)]
+p.total.TFBlearner.basic <- ggplot(prep.TFBlearner.basic, aes(x=method, y=h, fill=step_type))+
+                           geom_bar(position="stack", stat="identity")+
+                           scale_fill_manual(values=stepColors)+
+                           labs(fill="Step", y="Total time passed (h)", 
+                                title="TFBlearner.basic:\ntotal preprocessing time", 
+                                tags="E")+
+                           theme_sleek()+
+                           theme(axis.title.x=element_blank(), 
+                                 legend.position="none")
+                                 #plot.title=element_text(size=16, face="bold"),
+                                 #plot.tag=element_text(size=16, face="bold"),
+                                 #axis.text=element_text(size=14),
+                                 #axis.title=element_text(size=14),
+                                 #strip.text = element_text(size=14))
+p.step.TFBlearner.basic <- ggplot(prep.TFBlearner.basic.agg, 
+                                 aes(x=step_type, y=mean_h, 
+                                     fill=step_type))+
+  geom_col()+
+  geom_errorbar(aes(ymin = mean_h - sd_h, ymax = mean_h + sd_h), width = 0.2) +
+  labs(fill="Step", y="Mean time passed (h)", title="TFBlearner.basic: step repetition",
+        tags="F")+
+  facet_grid2(cols=vars(rep_type), 
+              scales="free", space="free", independent="y")+
+  scale_fill_manual(values=stepColors)+
+  scale_x_discrete(guide = guide_axis(n.dodge=3))+
+  theme_sleek()+
+  theme(axis.title.x=element_blank(), legend.position="none",
+        plot.title=element_text(hjust=0.5))
+
+        #plot.tag=element_text(size=16, face="bold"),
+        #axis.text=element_text(size=14),
+        #axis.title=element_text(size=14),
+        #strip.text = element_text(size=14))
+```
+
+```{r, preprocessing: TFBlearner full}
+prep.chip_labels <- list.files("../../benchmarks/TFBlearner", 
+                               pattern="chip_labels", 
+                               full.names=TRUE)
+prep.atac.files <- list.files("../../benchmarks/TFBlearner", 
+                               pattern="prep_subset_atac_data*",
+                               full.names=TRUE)
+prep.object1 <- file.path("../../benchmarks/TFBlearner", 
+                          paste0("prep_construct_object_", 
+                                 holdoutSet, ".tsv"))
+prep.object2 <- file.path("../../benchmarks/TFBlearner", 
+                          paste0("prep_construct_addSupport_object_", 
+                                 holdoutSet, ".tsv"))
+prep.site.features <- file.path("../../benchmarks/TFBlearner", 
+                                paste0("prep_addSupport_site_features_", holdoutSet, ".tsv"))
+prep.context.features <- file.path("../../benchmarks/TFBlearner", 
+                                   paste0("prep_addSupport_context_features_", holdoutSet, ".tsv"))
+prep.feature.matrices <- list.files("../../benchmarks/TFBlearner", 
+                                   pattern=paste0("prep_addSupport_feature_matrix",
+                                                  "_.*_", holdoutSet, ".tsv"), 
+                                   full.names=TRUE)
+prep.files <- c(prep.chip_labels,
+                prep.atac.files, 
+                prep.object1,
+                prep.object2,
+                prep.site.features,
+                prep.context.features,
+                prep.feature.matrices)
+prep.TFBlearner.addSupport <- lapply(prep.files, function(pf){
+                                     pfDt <- fread(pf)})
+names(prep.TFBlearner.addSupport) <- basename(prep.files)
+prep.TFBlearner.addSupport <- rbindlist(prep.TFBlearner.addSupport, idcol="file")
+prep.TFBlearner.addSupport[,step:=gsub(".tsv", "", file)]
+
+prep.TFBlearner.addSupport[,step_type:=fifelse(grepl("chip_labels", step),
+                                       "derive_chip_labels",step)]
+prep.TFBlearner.addSupport[,step_type:=fifelse(grepl("subset_atac_data", step),
+                                       "subset_atac_data",step_type)]
+prep.TFBlearner.addSupport[,step_type:=fifelse(grepl("construct", step),
+                                       "construct_object",step_type)]
+prep.TFBlearner.addSupport[,step_type:=fifelse(grepl("context_features", step),
+                                       "context_features",step_type)]
+prep.TFBlearner.addSupport[,step_type:=fifelse(grepl("site_features", step),
+                                       "site_features",step_type)]
+prep.TFBlearner.addSupport[,step_type:=fifelse(grepl("feature_matrix", step),
+                                       "feature_matrix",step_type)]
+prep.TFBlearner.addSupport1 <- subset(prep.TFBlearner.addSupport, 
+                                      step_type!="construct_object")
+prep.TFBlearner.addSupport2 <- subset(prep.TFBlearner.addSupport, 
+                                      step_type=="construct_object")
+prep.TFBlearner.addSupport2 <- prep.TFBlearner.addSupport2[,.(s=sum(s), 
+                                                              max_rss=max(max_rss)), 
+                                                           by=step_type]
+prep.TFBlearner.addSupport <- rbind(prep.TFBlearner.addSupport1, 
+                                    prep.TFBlearner.addSupport2, 
+                                    fill=TRUE, use.names=TRUE)
+
+prep.TFBlearner.addSupport[,rep_type:=fifelse(step_type=="feature_matrix",
+                                "per motif/TF", "once")]
+prep.TFBlearner.addSupport[,rep_type:=fifelse(step_type=="site_features",
+                                              "once", rep_type)]
+prep.TFBlearner.addSupport[,rep_type:=fifelse(step_type=="construct_object",
+                                              "once", rep_type)]
+prep.TFBlearner.addSupport[,rep_type:=fifelse(step_type=="context_features",
+                                              "once", rep_type)]
+prep.TFBlearner.addSupport[,rep_type:=fifelse(step_type=="subset_atac_data",
+                                              "per cellular context", rep_type)]
+prep.TFBlearner.addSupport[,rep_type:=fifelse(step_type=="derive_chip_labels",
+                                "per TF x cellular context", rep_type)]
+prep.TFBlearner.addSupport$method <- "TFBlearner.full"
+prep.TFBlearner.addSupport[,h:=s/3600]
+
+stepColors <- c("construct_object"="#990F0F",
+                "site_features"="#B22C2C",
+                "context_features"="#CC5151",
+                "subset_atac_data"="#6B990F",
+                "feature_matrix"="#0F6B99",
+                "derive_chip_labels"="#8F7EE5")
+prep.TFBlearner.addSupport[, step_type:=factor(step_type, 
+                                               levels=names(stepColors),
+                                               ordered=TRUE)]
+prep.TFBlearner.addSupport[,rep_type:=factor(rep_type,
+                                             levels=c("once", "per cellular context",
+                                                      "per motif/TF", 
+                                                      "per TF x cellular context"))]
+prep.TFBlearner.addSupport.agg <- prep.TFBlearner.addSupport[,.(sd_s=sd(s),
+                                   mean_s=mean(s), 
+                                   sd_h=sd(h),
+                                   sd_max_rss=sd(max_rss),
+                                   mean_max_rss=mean(max_rss),
+                                   max_max_rss=max(max_rss),
+                                   mean_h=mean(h)), 
+                                by=.(step_type, rep_type, method)]
+
+p.total.TFBlearner.full <- ggplot(prep.TFBlearner.addSupport, aes(x=method, y=h, fill=step_type))+
+                           geom_bar(position="stack", stat="identity")+
+                           scale_fill_manual(values=stepColors)+
+                           labs(fill="Step", y="Total time passed (h)", 
+                                title="TFBlearner.full:\ntotal preprocessing time", 
+                                tags="C")+
+                          theme_sleek()+
+                          theme(axis.title.x=element_blank(), 
+                                legend.position="none")
+                                #plot.title=element_text(size=16, face="bold"),
+                                #plot.tag=element_text(size=16, face="bold"),
+                                #axis.text=element_text(size=14),
+                                #axis.title=element_text(size=14),
+                                #strip.text = element_text(size=14))
+
+p.step.TFBlearner.full <- ggplot(prep.TFBlearner.addSupport.agg, 
+                                 aes(x=step_type, y=mean_h, 
+                                     fill=step_type))+
+  geom_col()+
+  geom_errorbar(aes(ymin = mean_h - sd_h, ymax = mean_h + sd_h), width = 0.2) +
+  labs(fill="Step", y="Mean time passed (h)", title="TFBlearner.full: step repetition",
+       tags="D")+
+  facet_grid2(cols=vars(rep_type), scales="free", space="free", independent="y")+
+  scale_fill_manual(values=stepColors)+
+  scale_x_discrete(guide = guide_axis(n.dodge=3))+
+  theme_sleek()+
+  theme(axis.title.x=element_blank(), 
+        legend.position="none",
+        plot.title=element_text(hjust=0.5),
+        #plot.tag=element_text(size=16, face="bold"),
+        #axis.text=element_text(size=14),
+        #axis.title=element_text(size=14),
+        #strip.text = element_text(size=14)
+        )
+```
+
+
+```{r, preprocessing: maxATAC.basic}
+prep.files <- list.files("../../benchmarks/maxATAC", pattern="prep_.*", 
+                         full.names=TRUE)
+prep.maxATAC <- lapply(prep.files, function(pf){
+                                pfDt <- fread(pf)})
+names(prep.maxATAC) <- basename(prep.files)
+prep.maxATAC <- rbindlist(prep.maxATAC, idcol="file")
+prep.maxATAC[,step:=gsub(".tsv", "", file)]
+
+prep.maxATAC[,step_type:=fifelse(grepl("convert_chip_coverage_tracks", step),
+                                       "convert_chip_coverage_tracks",step)]
+prep.maxATAC[,step_type:=fifelse(grepl("average_chip_coverage", step),
+                                       "average_chip_coverage",step_type)]
+prep.maxATAC[,step_type:=fifelse(grepl("prep_normalize_chip_coverage", step),
+                                       "normalize_chip_coverage",step_type)]
+prep.maxATAC[,step_type:=fifelse(grepl("prep_prepare_atac", step),
+                                       "prepare_atac",step_type)]
+prep.maxATAC[,step_type:=fifelse(grepl("normalize_atac", step),
+                                       "normalize_atac",step_type)]
+prep.maxATAC[,step_type:=fifelse(grepl("average_atac", step),
+                                       "average_atac",step_type)]
+prep.maxATAC[,rep_type:=fifelse(grepl("atac", step_type),
+                                "per cellular context", "once")]
+prep.maxATAC[,rep_type:=fifelse(grepl("chip", step_type),
+                                "per TF x cellular context", rep_type)]
+prep.maxATAC$method <- "maxATAC"
+prep.maxATAC[,h:=s/3600]
+
+stepColors <- c("prep_download_annotation_data"="#990F0F",
+                "prepare_atac"="#6B990F",
+                "average_atac"="#A3CC51",
+                "normalize_atac"="#E5FFB2",
+                "convert_chip_coverage_tracks"="#422CB2",
+                "average_chip_coverage"="#6551CC",
+                "normalize_chip_coverage"="#BFB2FF")
+prep.maxATAC[, step_type:=factor(step_type, 
+                                               levels=names(stepColors),
+                                               ordered=TRUE)]
+prep.maxATAC[,rep_type:=factor(rep_type,
+                               levels=c("once", "per cellular context",
+                                        "per TF", 
+                                        "per TF x cellular context"))]
+prep.maxATAC.ag <- prep.maxATAC[,.(sd_s=sd(s),
+                                   mean_s=mean(s),
+                                   sd_h=sd(h), 
+                                   mean_h=mean(h),
+                                   sd_max_rss=sd(max_rss),
+                                   mean_max_rss=mean(max_rss),
+                                   max_max_rss=max(max_rss)), 
+                                by=.(step_type, rep_type, method)]
+prep.maxATAC.ag[,rep_type:=factor(rep_type, ordered=TRUE, 
+                                  levels=c("once", "per cellular context", 
+                                           "per TF x cellular context"))]
+
+p.total.maxATAC.default <- ggplot(prep.maxATAC, aes(x=method, y=h, fill=step_type))+
+                           geom_bar(position="stack", stat="identity")+
+                           scale_fill_manual(values=stepColors)+
+                           labs(fill="Step", y="Total time passed (h)", 
+                                title="maxATAC:\ntotal preprocessing time", 
+                                tags="A")+
+                           theme_sleek()+
+                           theme(axis.title.x=element_blank(), 
+                                 legend.position="none")
+                                 #plot.title=element_text(size=16, face="bold"),
+                                 #plot.tag=element_text(size=16, face="bold"),
+                                 #axis.text=element_text(size=14),
+                                 #axis.title=element_text(size=14),
+                                 #strip.text = element_text(size=14))
+p.step.maxATAC.default <- ggplot(prep.maxATAC.ag, 
+                                 aes(x=step_type, y=mean_h, 
+                                     fill=step_type))+
+  geom_col()+
+  geom_errorbar(aes(ymin = mean_h - sd_h, ymax = mean_h + sd_h), width = 0.2) +
+  labs(fill="Step", y="Mean time passed (h)", title="maxATAC: step repetition",
+       tags="B")+
+  #facet_wrap(~rep_type, scales="free")+
+  facet_grid2(cols=vars(rep_type), scales="free", space="free", independent="y")+
+  scale_fill_manual(values=stepColors)+
+  scale_x_discrete(guide = guide_axis(n.dodge=3))+
+  theme_sleek()+
+  theme(axis.title.x=element_blank(), legend.position="none",
+        plot.title=element_text(hjust=0.5)
+        #plot.tag=element_text(size=16, face="bold"),
+        #axis.text=element_text(size=14),
+        #axis.title=element_text(size=14),
+        #strip.text = element_text(size=14)
+        )
+```
+
+```{r, preprocessing: BMO}
+prep.files <- list.files("../../benchmarks/BMO", pattern="prep_motif.*", 
+                         full.names=TRUE)
+prep.BMO <- lapply(prep.files, function(pf){
+                                pfDt <- fread(pf)})
+names(prep.BMO) <- basename(prep.files)
+prep.BMO <- rbindlist(prep.BMO, idcol="file")
+prep.BMO[,step:=gsub(".tsv", "", file)]
+
+prep.BMO[,step_type:="prepare_motifs_list"]
+prep.BMO[,step_type:=factor(step_type, 
+                                levels=c("prepare_motifs_list"), 
+                                ordered=TRUE)]
+prep.BMO[,rep_type:="per cellular context"]
+prep.BMO$method <- "BMO"
+prep.BMO[,h:=s/3600]
+stepColors <- c("prepare_motifs_list"="#6B990F")
+prep.BMO[, step_type:=factor(step_type, 
+                             levels=names(stepColors),
+                             ordered=TRUE)]
+prep.BMO[,rep_type:=factor(rep_type,
+                           levels=c("once", "per cellular context",
+                                    "per motif/TF", 
+                                    "per TF x cellular context"))]
+prep.BMO.ag <- prep.BMO[,.(sd_s=sd(s),
+                                   mean_s=mean(s),
+                                   sd_h=sd(h), 
+                                   mean_h=mean(h),
+                                   sd_max_rss=sd(max_rss),
+                                   mean_max_rss=mean(max_rss),
+                                   max_max_rss=max(max_rss)), 
+                                by=.(step_type, rep_type, method)]
+prep.BMO[,rep_type:=factor(rep_type, ordered=TRUE, 
+                                  levels=c("once", "per cellular context", 
+                                           "per TF x cellular context"))]
+
+p.total.BMO<- ggplot(prep.BMO, aes(x=method, y=h, fill=step_type))+
+                           geom_bar(position="stack", stat="identity")+
+                           scale_fill_manual(values=stepColors)+
+                           labs(fill="Step", y="total time passed (h)", 
+                                title="BMO:\ntotal preprocessing time", 
+                                tags="I")+
+                          theme_sleek()+
+                          theme(axis.title.x = element_blank(),
+                                #axis.title=element_text(size=14),
+                                #plot.title=element_text(size=16, face="bold"),
+                                #plot.tag=element_text(size=16, face="bold"),
+                                legend.position="none")
+prep.BMO
+p.step.BMO <- ggplot(prep.BMO.ag, 
+                                 aes(x=step_type, y=mean_h, 
+                                     fill=step_type))+
+  geom_col()+
+  geom_errorbar(aes(ymin = pmax(mean_h - sd_h,0), ymax = mean_h + sd_h), width = 0.2) +
+  labs(fill="Step", y="Mean time passed (h)", title="BMO: step repetition", tags="J")+
+  facet_grid2(cols=vars(rep_type), scales="free", space="free", independent="y")+
+  scale_fill_manual(values=stepColors)+
+  scale_x_discrete(guide = guide_axis(n.dodge=3))+
+  theme_sleek()+
+  theme(axis.title.x = element_blank(),
+        legend.position="none",
+        plot.title=element_text(hjust=0.5),
+        #plot.tag=element_text(size=16, face="bold"),
+        #axis.text=element_text(size=14),
+        #axis.title=element_text(size=14),
+        #strip.text = element_text(size=14)
+        )
+p.step.BMO
+```
+
+```{r, preprocessing: TOP}
+prep.files.motifs <- list.files("../../benchmarks/TOP",
+                                pattern="prepare_motif_matches_*",
+                                full.names=TRUE)
+prep.count.cuts <- list.files("../../benchmarks/TOP",
+                              pattern="prep_count_genome_cuts_*", 
+                              full.names=TRUE)
+prep.normalize.counts <- list.files("../../benchmarks/TOP",
+                              pattern="prep_normalize_count_matrix_*", 
+                              full.names=TRUE)
+prep.files.fm <- list.files("../../benchmarks/TOP", 
+                            pattern=paste0("prep_.*_", holdoutSet), 
+                            full.names=TRUE)
+prep.files <- c(prep.files.motifs, 
+                prep.count.cuts,
+                prep.normalize.counts, 
+                prep.files.fm)
+prep.TOP <- lapply(prep.files, function(pf){
+                                pfDt <- fread(pf)})
+names(prep.TOP) <- basename(prep.files)
+prep.TOP <- rbindlist(prep.TOP, idcol="file")
+prep.TOP[,step:=gsub(".tsv", "", file)]
+
+prep.TOP[,step_type:=fifelse(grepl("prepare_motif_matches", step),
+                                   "prepare_candidate_sites",step)]
+prep.TOP[,step_type:=fifelse(grepl("count_genome_cuts", step),
+                                   "count_ATAC_cuts",step_type)]
+prep.TOP[,step_type:=fifelse(grepl("normalize", step),
+                                   "normalize_cut_counts",step_type)]
+prep.TOP[,step_type:=fifelse(grepl("assemble_matrix", step),
+                            "assemble_matrix",step_type)]
+prep.TOP[,rep_type:=fifelse(step_type=="count_ATAC_cuts",
+                                "per cellular context", "once")]
+prep.TOP[,rep_type:=fifelse(step_type=="prepare_candidate_sites",
+                                              "per motif/TF", rep_type)]
+prep.TOP[,rep_type:=fifelse(step_type=="normalize_cut_counts",
+                                              "per TF x cellular context", rep_type)]
+prep.TOP[,rep_type:=fifelse(step_type=="assemble_matrix",
+                                              "per TF x cellular context", rep_type)]
+prep.TOP$method <- "TOP"
+prep.TOP[,h:=s/3600]
+stepColors <- c("count_ATAC_cuts"="#6B990F",
+                "prepare_candidate_sites"="#0F6B99",
+                "normalize_cut_counts"="#8F7EE5",
+                "assemble_matrix"="#BFB2FF")
+prep.TOP[, step_type:=factor(step_type, 
+                                               levels=names(stepColors),
+                                               ordered=TRUE)]
+prep.TOP[,rep_type:=factor(rep_type,
+                           levels=c("once", "per cellular context",
+                                    "per motif/TF", 
+                                    "per TF x cellular context"))]
+prep.TOP.agg <- prep.TOP[,.(sd_s=sd(s),
+                                   mean_s=mean(s), 
+                                   sd_h=sd(h), 
+                                   mean_h=mean(h),
+                                   sd_max_rss=sd(max_rss),
+                                   mean_max_rss=mean(max_rss),
+                                   max_max_rss=max(max_rss)), 
+                                by=.(step_type, rep_type, method)]
+
+p.total.TOP <- ggplot(prep.TOP, aes(x=method, y=h, fill=step_type))+
+                           geom_bar(position="stack", stat="identity")+
+                           scale_fill_manual(values=stepColors)+
+                           labs(fill="Step", y="Total time passed (h)", 
+                                title="Top:\ntotal preprocessing time", 
+                                tags="G")+
+                           theme_sleek()+
+                           theme(axis.title.x = element_blank(),
+                                 legend.position="none"
+                                 #plot.title=element_text(size=16, face="bold"),
+                                 #plot.tag=element_text(size=16, face="bold"),
+                                 #axis.title=element_text(size=14),
+                                 #axis.text=element_text(size=14),
+                                 #strip.text = element_text(size=14))
+                           )
+p.step.TOP <- ggplot(prep.TOP.agg, 
+                     aes(x=step_type, y=mean_h, 
+                         fill=step_type))+
+  geom_col()+
+  geom_errorbar(aes(ymin = pmax(mean_h - sd_h,0), ymax = mean_h + sd_h), width = 0.2) +
+  labs(fill="Step", y="Mean time passed (h)", title="TOP: step repetition", tags="H")+
+  scale_fill_manual(values=stepColors)+
+  scale_x_discrete(guide = guide_axis(n.dodge=3))+
+  facet_grid2(cols=vars(rep_type), scales="free", space="free", independent="y")+
+  theme_sleek()+
+  theme(axis.title.x=element_blank(), 
+        plot.title=element_text(hjust=0.5),
+        #plot.tag=element_text(size=16, face="bold"),
+        legend.position="none",
+        #axis.title=element_text(size=14),
+        #axis.text=element_text(size=14),
+        #strip.text = element_text(size=14)
+        )
+```
+
+```{r, detailed preprocessing plot}
+(p.total.maxATAC.default+plot_spacer()+p.step.maxATAC.default+plot_layout(width=c(1,0.2,5))) /
+(p.total.TFBlearner.full+plot_spacer()+p.step.TFBlearner.full+plot_layout(width=c(1,0.2,5))) / 
+(p.total.TFBlearner.basic+plot_spacer()+p.step.TFBlearner.basic+plot_layout(width=c(1,0.2,5))) /
+(p.total.TOP+plot_spacer()+p.step.TOP+plot_layout(width=c(1,0.2,5)))
+#/ (p.total.BMO+p.step.BMO+plot_layout(guides = "collect")&theme(legend.position = "bottom"))
+ggsave("comp_time_preprocessing_detailed.pdf", 
+       width=65, height=50, units="cm", dpi=150)
+```
+
+```{r, main preprocessing full}
+prep.full.agg <- data.table(s_passed=c(sum(prep.maxATAC$s),
+                                   sum(prep.TFBlearner.basic$s),
+                                   sum(prep.TFBlearner.addSupport$s),
+                                   sum(prep.BMO$s),
+                                   sum(prep.TOP$s)),
+                        method=c("maxATAC", "TFBlearner.basic", 
+                                 "TFBlearner.full", "BMO", "TOP"))
+prep.full.agg[,h_passed:=s_passed/3600]
+setorder(prep.full.agg, -h_passed)
+prep.full.agg[,method:=factor(method, levels=unique(prep.full.agg$method), 
+                          ordered=TRUE)]
+prep.full.agg$overall_step <- "preprocessing"
+```
+
+## Training
+
+```{r, training all:}
+train.files.maxATAC.100 <- list.files("../../benchmarks/maxATAC", 
+                                      pattern=paste0("train_", holdoutSet, "_.*_100"), 
+                                      full.names=TRUE)
+train.maxATAC.100 <- lapply(train.files.maxATAC.100, fread)
+names(train.maxATAC.100) <- basename(train.files.maxATAC.100)
+train.maxATAC.100 <- rbindlist(train.maxATAC.100, idcol="step")
+train.maxATAC.100$method <- "maxATAC.100"
+train.maxATAC.100$rep_type <- "per TF"
+
+train.files.maxATAC.default <-  list.files("../../benchmarks/maxATAC", 
+                                     pattern=paste0("train_", holdoutSet, "_.*_20"),
+                                     full.names=TRUE)
+train.maxATAC.default <- lapply(train.files.maxATAC.default, fread)
+names(train.maxATAC.default) <- basename(train.files.maxATAC.default)
+train.maxATAC.default <- rbindlist(train.maxATAC.default, idcol="step")
+train.maxATAC.default$method <- "maxATAC.default"
+train.maxATAC.default$rep_type <- "per TF"
+
+train.files.TFBlearner.full <-  list.files("../../benchmarks/TFBlearner", 
+                                            pattern=paste0("train_addSupport_.*_", holdoutSet),
+                                            full.names=TRUE)
+train.TFBlearner.full <- lapply(train.files.TFBlearner.full, fread)
+names(train.TFBlearner.full) <- basename(train.files.TFBlearner.full)
+train.TFBlearner.full <- rbindlist(train.TFBlearner.full, idcol="step")
+train.TFBlearner.full$method <- "TFBlearner.full"
+train.TFBlearner.full$rep_type <- "per TF"
+
+train.files.TFBlearner.basic <-  list.files("../../benchmarks/TFBlearner", 
+                                            pattern=paste0("train_.*_", holdoutSet),
+                                            full.names=TRUE)
+train.files.TFBlearner.basic <- train.files.TFBlearner.basic[!grepl("addSupport",
+                                                                    train.files.TFBlearner.basic)]
+train.TFBlearner.basic <- lapply(train.files.TFBlearner.basic, fread)
+names(train.TFBlearner.basic) <- basename(train.files.TFBlearner.basic)
+train.TFBlearner.basic <- rbindlist(train.TFBlearner.basic, idcol="step")
+train.TFBlearner.basic$method <- "TFBlearner.basic"
+train.TFBlearner.basic$rep_type <- "per TF"
+
+train.files.BMO <-  list.files("../../benchmarks/BMO",
+                               pattern=paste0("train_pred_*"),
+                               full.names=TRUE)
+train.BMO <- lapply(train.files.BMO, fread)
+names(train.BMO) <- basename(train.files.BMO)
+train.BMO <- rbindlist(train.BMO, idcol="step")
+train.BMO$method <- "BMO"
+train.BMO$rep_type <- "per cellular context"
+
+train.files.TOP <-  list.files("../../benchmarks/TOP",
+                               pattern=paste0("train_logistic_", holdoutSet),
+                               full.names=TRUE)
+train.TOP <- lapply(train.files.TOP, fread)
+names(train.TOP) <- basename(train.files.TOP)
+train.TOP <- rbindlist(train.TOP, idcol="step")
+train.TOP$method <- "TOP"
+train.TOP$rep_type <- "once for all"
+
+train.full <- rbindlist(list(train.TOP, 
+                             train.BMO, 
+                             train.TFBlearner.basic, 
+                             train.TFBlearner.full,
+                             train.maxATAC.default, 
+                             train.maxATAC.100), 
+                        use.names=TRUE, fill=TRUE)
+train.full[,h:=s/3600]
+train.full.agg <- train.full[,.(sum_s=sum(s),
+                                sd_s=sd(s),
+                                mean_h=mean(h),
+                                sd_h=sd(h),
+                                mean_s=mean(s),
+                                sd_max_rss=sd(max_rss),
+                                mean_max_rss=mean(max_rss),
+                                max_max_rss=max(max_rss)), 
+                             by=.(rep_type, method)]
+
+train.full.agg$overall_step <- "training"
+train.full.agg[,h_passed:=sum_s/3600]
+setorder(train.full.agg, h_passed)
+train.full.agg[,method:=factor(method, levels=train.full.agg$method, 
+                               ordered=TRUE)]
+```
+
+## Prediction
+
+```{r, prediction all:}
+pred.files.maxATAC.100 <- list.files("../../benchmarks/maxATAC", 
+                                     pattern=paste0("pred_dhs_", holdoutSet, "_.*_100"), 
+                                     full.names=TRUE)
+pred.maxATAC.100 <- lapply(pred.files.maxATAC.100, fread)
+names(pred.maxATAC.100) <- basename(pred.files.maxATAC.100)
+pred.maxATAC.100 <- rbindlist(pred.maxATAC.100, idcol="step")
+pred.maxATAC.100$method <- "maxATAC.100"
+pred.maxATAC.100$rep_type <- "per TF x cellular context"
+
+pred.files.maxATAC.default <-  list.files("../../benchmarks/maxATAC", 
+                                     pattern=paste0("pred_dhs_", holdoutSet, "_.*_20"),
+                                     full.names=TRUE)
+pred.maxATAC.default <- lapply(pred.files.maxATAC.default, fread)
+names(pred.maxATAC.default) <- basename(pred.files.maxATAC.default)
+pred.maxATAC.default <- rbindlist(pred.maxATAC.default, idcol="step")
+pred.maxATAC.default$method <- "maxATAC.default"
+pred.maxATAC.default$rep_type <- "per TF x cellular context"
+
+pred.files.TFBlearner.full <-  list.files("../../benchmarks/TFBlearner", 
+                                          pattern=paste0("pred_addSupport_.*_", holdoutSet),
+                                          full.names=TRUE)
+pred.TFBlearner.full <- lapply(pred.files.TFBlearner.full, fread)
+names(pred.TFBlearner.full) <- basename(pred.files.TFBlearner.full)
+pred.TFBlearner.full <- rbindlist(pred.TFBlearner.full, idcol="step")
+pred.TFBlearner.full$method <- "TFBlearner.full"
+pred.TFBlearner.full$rep_type <- "per TF x cellular context"
+
+pred.files.TFBlearner.basic <-  list.files("../../benchmarks/TFBlearner", 
+                                            pattern=paste0("pred_.*_", holdoutSet),
+                                            full.names=TRUE)
+pred.files.TFBlearner.basic <- pred.files.TFBlearner.basic[!grepl("addSupport",
+                                                                  pred.files.TFBlearner.basic)]
+pred.TFBlearner.basic <- lapply(pred.files.TFBlearner.basic, fread)
+names(pred.TFBlearner.basic) <- basename(pred.files.TFBlearner.basic)
+pred.TFBlearner.basic <- rbindlist(pred.TFBlearner.basic, idcol="step")
+pred.TFBlearner.basic$method <- "TFBlearner.basic"
+pred.TFBlearner.basic$rep_type <- "per TF x cellular context"
+
+pred.files.TOP <-  list.files("../../benchmarks/TOP",
+                               pattern=paste0("pred_logistic_", holdoutSet, "_.*"),
+                               full.names=TRUE)
+pred.TOP <- lapply(pred.files.TOP, fread)
+names(pred.TOP) <- basename(pred.files.TOP)
+pred.TOP <- rbindlist(pred.TOP, idcol="step")
+pred.TOP$method <- "TOP"
+pred.TOP$rep_type <- "per TF x cellular context"
+
+pred.full <- rbindlist(list(pred.TOP, 
+                            pred.TFBlearner.basic, 
+                            pred.TFBlearner.full,
+                            pred.maxATAC.default, 
+                            pred.maxATAC.100), 
+                        use.names=TRUE, fill=TRUE)
+pred.full[,h:=s/3600]
+pred.full.agg <- pred.full[,.(sum_s=sum(s),
+                                sd_s=sd(s),
+                                mean_h=mean(h),
+                                sd_h=sd(h),
+                                mean_s=mean(s),
+                                sd_max_rss=sd(max_rss),
+                                mean_max_rss=mean(max_rss),
+                                max_max_rss=max(max_rss)), 
+                             by=.(rep_type, method)]
+
+pred.full.agg$overall_step <- "predicting"
+pred.full.agg[,h_passed:=sum_s/3600]
+setorder(pred.full.agg, h_passed)
+pred.full.agg[,method:=factor(method, levels=train.full.agg$method, 
+                               ordered=TRUE)]
+```
+
+
+## Overall plots
+
+```{r, main plots full}
+time.full <- rbind(train.full.agg, prep.full.agg, pred.full.agg, 
+                   fill=TRUE, use.names=TRUE)
+time.full[,overall_step:=factor(time.full$overall_step, 
+                                levels=c("preprocessing", 
+                                         "training",
+                                         "predicting"),
+                                ordered=TRUE)]
+setorder(pred.full.agg, mean_h)
+pred.full.agg[,method:=factor(method, 
+                              levels=unique(pred.full.agg$method),
+                              ordered=TRUE)]
+time.full[,method:=factor(method, 
+                          levels=c("BMO", levels(pred.full.agg$method), "maxATAC"),
+                          ordered=TRUE)]
+p.bar.time.total <- ggplot(time.full, aes(x=method, y=h_passed, 
+                           fill=method))+
+geom_bar(stat="identity")+
+facet_wrap(~overall_step, scales="free")+
+labs(y="Total time passed (h)", x="", title="Total time passed",
+     tags="A")+
+scale_fill_manual(values=methodColors)+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+theme(legend.position="none")+
+theme_sleek()+
+theme(legend.position="none",
+      plot.tag=element_text(size=16, face="bold"))
+
+p.train.step <- ggplot(train.full.agg, aes(x=method, y=mean_h, fill=method))+
+geom_col()+
+geom_errorbar(aes(ymin = pmax(mean_h - sd_h,0), ymax = mean_h + sd_h), width = 0.2) +
+labs(fill="Step", y="Mean time passed (h)", title="Training step:",
+     tags="B")+
+scale_fill_manual(values=methodColors)+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+facet_grid(cols=vars(rep_type), scales="free_x", space="free")+
+scale_y_sqrt()+
+theme_sleek()+
+theme(legend.position="none",
+      plot.tag=element_text(size=16, face="bold"))
+
+setorder(pred.full.agg, mean_h)
+pred.full.agg[,method:=factor(method, 
+                              levels=unique(pred.full.agg$method),
+                              ordered=TRUE)]
+p.pred.step <- ggplot(pred.full.agg, aes(x=method, y=mean_h, fill=method))+
+geom_col()+
+geom_errorbar(aes(ymin = pmax(mean_h - sd_h,0), ymax = mean_h + sd_h), width = 0.2) +
+labs(fill="Step", y="Mean time passed (h)", title="Prediction step:",
+     tags="C")+
+scale_fill_manual(values=methodColors)+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+facet_wrap(~rep_type, scales="free")+
+theme_sleek()+
+theme(legend.position="none",
+      plot.tag=element_text(size=16, face="bold"))
+
+p.bar.time.main <- (p.bar.time.total / (p.train.step + p.pred.step + plot_layout(widths=c(2,1))))
+saveRDS(p.bar.time.main, "p.bar.time.main.rds")
+p.bar.time.main
+ggsave("comp_time_full.pdf", units="cm", width=30, height=20, 
+       dpi=150)
+```
+
+```{r, train & pred step for main figure}
+train.full.agg[,model_type:=fifelse(method %in% c("TFBlearner.full", 
+                                              "TFBlearner.basic",
+                                              "maxATAC.default",
+                                              "maxATAC.100"), 
+                                "Supervised method",
+                                "Baseline scores")]
+train.full.agg[,model_type:=fifelse(method=="BMO", "Motif match-based method", model_type)]
+train.full.agg[,model_type:=fifelse(method=="TOP", "Supervised & motif match-based method", model_type)]
+p.train.step <- ggplot(train.full.agg, aes(y=method, x=mean_h, color=method))+
+geom_col(aes(fill=model_type), size=1)+
+geom_errorbar(aes(xmin = pmax(mean_h - sd_h,0), xmax = mean_h + sd_h), 
+              width = 0.2, color="black") +
+labs(color="Step", x="Mean time passed (h)", subtitle="Training step:",
+     tags="E")+
+scale_color_manual(values=methodColors)+
+scale_fill_manual(values=modelTypeColors)+
+#scale_y_discrete(guide = guide_axis(n.dodge=3))+
+#facet_grid2(rows = vars(rep_type),
+#            space = "free_y", scales = "free_y")+ #,strip = strip_vanilla(position = "top")
+scale_x_sqrt()+
+#facet_grid(rows = vars(rep_type), 
+#           scales = "free_y", 
+#           space = "free") +
+facet_manual(
+    ~ rep_type,
+    design = matrix(1:3, ncol = 1),  # vertical layout
+    strip.position = "top",
+    heights = c(1, 1, 4),
+    scales="free_y"
+  )+
+theme_sleek()+
+theme(legend.position="none",
+      axis.title.y=element_blank())
+
+setorder(pred.full.agg, mean_h)
+pred.full.agg[,method:=factor(method, 
+                              levels=unique(pred.full.agg$method),
+                              ordered=TRUE)]
+pred.full.agg[,model_type:=fifelse(method %in% c("TFBlearner.full", 
+                                              "TFBlearner.basic",
+                                              "maxATAC.default",
+                                              "maxATAC.100"), 
+                                "Supervised method",
+                                "Baseline scores")]
+pred.full.agg[,model_type:=fifelse(method=="BMO", "Motif match-based method", model_type)]
+pred.full.agg[,model_type:=fifelse(method=="TOP", "Supervised & motif match-based method", model_type)]
+
+p.pred.step <- ggplot(pred.full.agg, aes(y=method, x=mean_h, color=method))+
+geom_col(aes(fill=model_type), size=1)+
+geom_errorbar(aes(xmin = pmax(mean_h - sd_h,0), xmax = mean_h + sd_h), width = 0.2, 
+              color="black") +
+labs(color="Step", x="Mean time passed (h)", subtitle="Prediction step:",
+     tags="F")+
+scale_color_manual(values=methodColors)+
+scale_fill_manual(values=modelTypeColors)+
+#scale_x_discrete(guide = guide_axis(n.dodge=3))+
+facet_grid(cols=vars(rep_type))+
+theme_sleek()+
+theme(legend.position="none",
+      plot.tag=element_text(size=16, face="bold"), 
+      axis.title.y=element_blank())
+
+
+saveRDS(p.train.step, "p.train.step.opt1.rds")
+saveRDS(p.pred.step, "p.pred.step.rds")
+
+train.full.agg2 <- subset(train.full.agg, !(method %in% c("TOP", "BMO")))
+train.full.agg3 <- subset(train.full.agg, method %in% c("TOP", "BMO"))
+train.full.agg3[,mean_h:=mean_h/nrow(train.TFBlearner.basic)]
+train.full.agg2 <- rbind(train.full.agg2, train.full.agg3)
+train.full.agg2$rep_type <- "per TF"
+
+p.train.step <- ggplot(train.full.agg2, aes(y=method, x=mean_h, color=method))+
+geom_col(aes(fill=model_type), size=1)+
+geom_errorbar(aes(xmin = pmax(mean_h - sd_h,0), xmax = mean_h + sd_h), 
+              width = 0.2, color="black") +
+labs(color="Step", x="Mean time passed (h)", subtitle="Training step per TF:",
+     tags="E")+
+scale_color_manual(values=methodColors)+
+scale_fill_manual(values=modelTypeColors)+
+scale_x_sqrt()+
+theme_sleek()+
+theme(legend.position="none",
+      axis.title.y=element_blank())
+saveRDS(p.train.step, "p.train.step.opt2.rds")
+
+p.pred.step <- ggplot(pred.full.agg, aes(y=method, x=mean_h, color=method))+
+geom_col(aes(fill=model_type), size=1)+
+geom_errorbar(aes(xmin = pmax(mean_h - sd_h,0), xmax = mean_h + sd_h), width = 0.2, 
+              color="black") +
+labs(color="Step", x="Mean time passed (h)", subtitle="Prediction step per TF x cellular context:",
+     tags="F")+
+scale_color_manual(values=methodColors)+
+scale_fill_manual(values=modelTypeColors)+
+#scale_x_discrete(guide = guide_axis(n.dodge=3))+
+#facet_grid(cols=vars(rep_type))+
+theme_sleek()+
+theme(legend.position="none",
+      plot.tag=element_text(size=16, face="bold"), 
+      axis.title.y=element_blank())
+saveRDS(p.pred.step, "p.pred.step.opt2.rds")
+```
+
+```{r, simp}
+pred.full.agg[,model_type:=fifelse(method=="TFBlearner.full", 
+                                   "TFBlearner.full",model_type)]
+pred.full.agg[,model_type:=fifelse(method=="maxATAC.100", 
+                                   "maxATAC", model_type)]
+p.pred.step <- ggplot(pred.full.agg, aes(y=method, x=mean_h, color=method))+
+geom_col(aes(fill=model_type), size=1)+
+geom_errorbar(aes(xmin = pmax(mean_h - sd_h,0), xmax = mean_h + sd_h), width = 0.2, 
+              color="black") +
+labs(color="Step", x="Mean time passed (h)", subtitle="Prediction step per TF x cellular context:",
+     tags="F")+
+scale_color_manual(values=methodColors)+
+scale_fill_manual(values=c(modelTypeColors, methodColors[c(1,4)]))+
+#scale_x_discrete(guide = guide_axis(n.dodge=3))+
+#facet_grid(cols=vars(rep_type))+
+theme_sleek()+
+theme(legend.position="none",
+      plot.tag=element_text(size=16, face="bold"), 
+      axis.title.y=element_blank())
+saveRDS(p.pred.step, "p.pred.step.simp.rds")
+```
+
+```{r, detailed total time plot}
+((p.bar.time.total) / 
+(p.total.maxATAC.default+labs(tags="B")+plot_spacer()+p.step.maxATAC.default+plot_layout(width=c(1,0.2,5))+labs(tags="C")) /
+(p.total.TFBlearner.full+labs(tags="D")+plot_spacer()+p.step.TFBlearner.full+plot_layout(width=c(1,0.2,5))+labs(tags="E")) / 
+(p.total.TFBlearner.basic+labs(tags="F")+plot_spacer()+p.step.TFBlearner.basic+plot_layout(width=c(1,0.2,5))+labs(tags="G")) /
+(p.total.TOP+labs(tags="H")+plot_spacer()+p.step.TOP+plot_layout(width=c(1,0.2,5))+labs(tags="I")))&theme(axis.text.x=element_text(size=16),                                                                    axis.text.y=element_text(size=16),
+    axis.title.y=element_text(size=16),
+    plot.title = element_text(size=16, face="plain"),
+    strip.text=element_text(size=12),
+    plot.tag=element_text(size=20))
+ggsave("supplementary_comp_time_total_detailed.pdf", 
+       width=60, height=54, units="cm", dpi=150)
+```
+
+```{r, detailed plots max_rss}
+setorder(train.full.agg, mean_max_rss)
+p.train.step <- ggplot(train.full.agg, aes(x=method, y=mean_max_rss, fill=method))+
+geom_col()+
+geom_errorbar(aes(ymin=pmax(mean_max_rss-sd_max_rss,0), 
+                  ymax=mean_max_rss+sd_max_rss), width = 0.2) +
+labs(fill="Step", y="Max RSS (mb)", title="Training step:", tags="A")+
+scale_fill_manual(values=methodColors)+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+facet_grid(cols=vars(rep_type), scales="free_x", space="free")+
+theme_sleek()+
+theme(legend.position="none")
+
+pred.full.agg[,method:=factor(method, 
+                              levels=c(unique(train.full.agg$method)),
+                              ordered=TRUE)]
+p.pred.step <- ggplot(pred.full.agg, aes(x=method, y=mean_max_rss, fill=method))+
+geom_col()+
+geom_errorbar(aes(ymin=pmax(mean_max_rss-sd_max_rss,0), 
+                  ymax=mean_max_rss+sd_max_rss), width = 0.2) +
+labs(fill="Step", y="Max RSS (mb)", title="Prediction step:", tags="B")+
+scale_fill_manual(values=methodColors)+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+facet_wrap(~rep_type, scales="free")+
+theme_sleek()+
+theme(legend.position="none")
+
+# prep.TOP.agg
+p.step.full <- rbind(prep.TFBlearner.addSupport.agg, 
+                     prep.TFBlearner.basic.agg,
+                     prep.maxATAC.ag, 
+                     prep.TOP.agg,
+                     fill=TRUE, use.names=TRUE)
+p.bar.step <- ggplot(p.step.full, aes(x=step_type, y=mean_max_rss, fill=method))+
+geom_col()+
+geom_errorbar(aes(ymin=pmax(mean_max_rss-sd_max_rss,0), 
+                  ymax=mean_max_rss+sd_max_rss), width = 0.2) +
+labs(fill="Step", y="Max RSS (mb)", title="Preprocessing step:", x="", tags="C")+
+scale_fill_manual(values=methodColors)+
+scale_x_discrete(guide = guide_axis(n.dodge=3))+
+ggh4x::facet_grid2(method ~ rep_type, scales = "free", independent = "x", 
+                   drop=TRUE, render_empty=FALSE)+
+theme_sleek()+
+theme(legend.position="none")
+
+(((p.train.step + p.pred.step+plot_layout(widths=c(2.5,1))) / p.bar.step) + plot_layout(heights=c(1,4)))&theme(axis.text.x=element_text(size=14),                                                                    axis.text.y=element_text(size=14),
+    axis.title.y=element_text(size=16),
+    axis.title.x=element_blank(),
+    plot.title = element_text(size=16),
+    strip.text=element_text(size=14),
+    plot.tag=element_text(size=20))
+ggsave("comp_rss_preprocessing_detailed.pdf", width=50, 
+       height=50, units="cm", dpi=150)
+```
+
+```{r, sessionInfo}
+sessionInfo()
+```

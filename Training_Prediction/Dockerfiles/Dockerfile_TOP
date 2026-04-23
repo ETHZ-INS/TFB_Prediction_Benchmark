@@ -1,0 +1,93 @@
+FROM condaforge/mambaforge:latest
+
+SHELL ["/bin/bash", "-lc"]
+
+# Helps avoid intermittent conda/mamba plugin crashes in some environments
+ENV CONDA_NO_PLUGINS=true
+
+# System dependencies for compiling legacy C code (libbeato/bwtool)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    build-essential \
+    autoconf \
+    automake \
+    libtool \
+    pkg-config \
+    zlib1g-dev \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# TOP runtime dependencies (R + bio tools)
+RUN mamba install -y -n base -c conda-forge -c bioconda \
+    r-base \
+    r-remotes \
+    r-devtools \
+    r-data.table \
+    r-ggplot2 \
+    r-r2jags \
+    r-doparallel \
+    bioconductor-genomicranges \
+    bioconductor-rsamtools \
+    jags \
+    bedtools \
+    samtools \
+    ucsc-bedgraphtobigwig \
+    ucsc-bigwigaverageoverbed \
+    meme \
+    && mamba clean -afy
+
+# Legacy-friendly compiler flags for old libbeato/bwtool code
+ENV LEGACY_CFLAGS="-O2 -fcommon -Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=unused-but-set-variable"
+
+# Build libbeato with compatibility patches
+RUN cd /tmp && \
+    git clone https://github.com/CRG-Barcelona/libbeato.git && \
+    cd libbeato && \
+    \
+    # Inject common.h into beato headers (provides boolean/bits32 and related types)
+    for f in beato/*.h; do \
+      grep -q '../jkweb/common.h' "$f" || sed -i '1i #include "../jkweb/common.h"' "$f"; \
+    done && \
+    \
+    # Ensure hash.h has FILE + common types
+    grep -q '#include <stdio.h>' jkweb/hash.h || sed -i '1i #include <stdio.h>' jkweb/hash.h && \
+    grep -q '#include "common.h"' jkweb/hash.h || sed -i '1i #include "common.h"' jkweb/hash.h && \
+    \
+    # Ensure size_t in sax.h
+    grep -q '#include <stddef.h>' beato/sax.h || sed -i '1i #include <stddef.h>' beato/sax.h && \
+    \
+    # Ensure fastq_stuff.h can see FILE and lineFile declaration
+    grep -q '#include <stdio.h>' beato/fastq_stuff.h || sed -i '1i #include <stdio.h>' beato/fastq_stuff.h && \
+    grep -q 'struct lineFile;' beato/fastq_stuff.h || sed -i '1i struct lineFile;' beato/fastq_stuff.h && \
+    \
+    ./configure --prefix=/usr/local CFLAGS="${LEGACY_CFLAGS}" && \
+    make -j1 && \
+    make install
+
+# Build bwtool against installed libbeato
+RUN cd /tmp && \
+    git clone https://github.com/CRG-Barcelona/bwtool.git && \
+    cd bwtool && \
+    ./configure \
+      --prefix=/usr/local \
+      CFLAGS="${LEGACY_CFLAGS}" \
+      CPPFLAGS="-I/usr/local/include" \
+      LDFLAGS="-L/usr/local/lib -Wl,-rpath,/usr/local/lib" && \
+    make -j1 && \
+    make install && \
+    rm -rf /tmp/libbeato /tmp/bwtool
+
+# Runtime linker path for libbeato
+ENV LD_LIBRARY_PATH=/usr/local/lib:/opt/conda/lib
+
+# Install TOP package
+RUN R -q -e "remotes::install_github('HarteminkLab/TOP')"
+
+# Build-time checks
+RUN which bwtool && bwtool 2>/dev/null || true
+RUN R -q -e "library(TOP); packageVersion('TOP')"
+
+WORKDIR /work
+CMD ["R"]

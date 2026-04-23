@@ -1,0 +1,69 @@
+---
+title: "Prediction TFBlearner"
+output: html_document
+date: "2025-03-13"
+params: 
+  outDir: "data"
+  outPath: "data/pred.tsv"
+  tfName: "ATF3"
+  fmTestPath: "fmTestBasic.rds"
+  modelPath: "basicModel.txt"
+  valChrs: "chr4"
+  seed: 43
+  threads: 16
+---
+
+
+```{r setup, error=TRUE}
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(EnsDb.Hsapiens.v86)
+library(phastCons100way.UCSC.hg38)
+library(parallel)
+library(TFBlearner)
+library(data.table)
+library(GenomicRanges)
+library(BiocParallel)
+
+seed <- as.integer(params$seed)
+set.seed(seed)
+threads <- as.integer(params$threads)
+outDir <- params$outDir
+
+setDTthreads(threads)
+tfName <- params$tfName
+valChrs <- params$valChrs
+valChrs <- unlist(tstrsplit(valChrs, split=" "))
+```
+
+
+
+# Prediction
+
+```{r, prediction, error=TRUE}
+fmTest <- readRDS(params$fmTestPath)
+
+# subset to autosomes
+rangesFm <- rowRanges(fmTest)
+rangeDt <- as.data.table(rangesFm)
+rangeDt[,row_id:=1:.N]
+
+testInd <- subset(rangeDt, seqnames %in% valChrs)$row_id
+testRanges <- rangesFm[testInd]
+fmSubTest <- IRanges::subsetByOverlaps(fmTest, testRanges, type = "equal")
+
+mods <- loadModels(params$modelPath)
+preds <- predictTfBinding(mods, fmSubTest, 
+                          chunk=NULL,
+                          simplified=TRUE,
+                          sparsify=FALSE,
+                          numThreads=threads,
+                          BPPARAM=SerialParam())
+
+if(!dir.exists(file.path("..", outDir))) dir.create(file.path("..", outDir))
+saveRDS(preds, params$outPath)
+```
+
+
+```{r, session info}
+sessionInfo()
+```

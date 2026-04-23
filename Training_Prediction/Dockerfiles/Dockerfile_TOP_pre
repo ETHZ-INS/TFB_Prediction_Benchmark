@@ -1,0 +1,32 @@
+FROM condaforge/mambaforge:latest
+
+SHELL ["/bin/bash", "-lc"]
+
+ENV CONDA_NO_PLUGINS=true
+
+RUN mamba install -y -n base -c conda-forge -c bioconda \
+      r-base \
+      r-remotes \
+      r-devtools \
+      r-data.table \
+      r-ggplot2 \
+      r-r2jags \
+      r-doparallel \
+      bioconductor-genomicranges \
+      bioconductor-rsamtools \
+      jags \
+      bedtools \
+      samtools \
+      ucsc-bedgraphtobigwig \
+      ucsc-bigwigaverageoverbed \
+      meme \
+    && mamba clean -afy
+
+RUN R -q -e "remotes::install_github('HarteminkLab/TOP')"
+
+RUN R -q -e "library(TOP); packageVersion('TOP')"
+
+RUN which bedtools && which samtools && which fimo
+
+WORKDIR /work
+CMD ["R"]
