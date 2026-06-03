@@ -11,14 +11,14 @@ from functools import partial
 os.makedirs('Training_Prediction/data/common', exist_ok=True)
 os.makedirs('Training_Prediction/output/preprocessing', exist_ok=True)
 
-#configfile: "config.yaml"
-
-SEED = config["seed"]
-METHODS =  ["TFBlearner"] # "TFBlearner"
+METHODS = config["methods"]
+SEED = config["seed"] 
 HOLDOUT = config["holdout"] 
 TFSUB = config["subset_tfs"]
 
 MODULE_PREFIX = config.get("module_prefix", "")
+ANNOTATION_DIR = config.get("annotation_dir", "data/annotation")
+
 def prefix_path(path):
     import os
     return os.path.join(MODULE_PREFIX, path) if MODULE_PREFIX else path
@@ -154,10 +154,6 @@ def final_targets(_):
     for builder in ALL_TARGET_BUILDERS:
         targets.extend(builder(ckpt1))
     return targets
-  
-#rule all:
-#    input:
-#      final_targets
 
 # setting global limits for methods
 resource_scopes:
@@ -167,8 +163,8 @@ resource_scopes:
 
 rule common_prereg_data:
     input:
-        add_chip_data="data/annotation/ChIP_mapped.h5",
-        dhs_coords="data/annotation/dhs.bed"
+        add_chip_data=f"{ANNOTATION_DIR}/ChIP_mapped.h5",
+        dhs_coords=f"{ANNOTATION_DIR}/dhs.bed"
     output:
         train_data_identifiers="data/common/prereg_trainData.csv",
         test_data_identifiers="data/common/prereg_testData.csv"
@@ -338,7 +334,7 @@ rule common_remove_blacklisted_merged_chip_peaks:
   threads: 1
   params:
     peak_dir="Training_Prediction/data/common/02_merged_chip_peaks",
-    blacklist_path="Training_Prediction/data/annotation/blacklist.bed",
+    blacklist_path=f"{ANNOTATION_DIR}/blacklist.bed",
   shell:
     """
       exec 2>>{log} 
@@ -358,7 +354,7 @@ rule common_remove_blacklisted_noncons_chip_peaks:
   threads: 1
   params:
     peak_dir="Training_Prediction/data/common/02_merged_chip_peaks",
-    blacklist_path="Training_Prediction/data/annotation/blacklist.bed",
+    blacklist_path=f"{ANNOTATION_DIR}/blacklist.bed",
   shell:
     """
       exec 2>>{log} 
@@ -378,7 +374,7 @@ rule common_remove_blacklisted_signal_chip_peaks:
   threads: 1
   params:
     peak_dir="data/common/02_merged_chip_peaks",
-    blacklist_path="data/annotation/blacklist.bed",
+    blacklist_path=f"{ANNOTATION_DIR}/blacklist.bed",
   shell:
     """
       exec 2>>{log} 
@@ -416,7 +412,7 @@ def atac_placeholder_tsv(wc):
   
 rule common_download_encode_atac_data:
   input:
-    placeholder_file=atac_placeholder_tsv 
+    placeholder_file=atac_placeholder_tsv
   output:
      bam_file="data/common/01_raw_atac/{accession}.bam",
      idxstats_file="data/common/01_raw_atac/{accession}.idxstats.txt"
@@ -474,8 +470,9 @@ rule common_process_nonencode_atac_jurkat:
   output:
      proc_atac_jurkat="data/common/02_merged_atac/merged_Jurkat.bam",  #TODO: wrap in temp()
   params:
-    index="data/annotation/BOWTIE2Index_chr/genome",
-    chr_sizes="data/annotation/reChr.sizes",
+    annotation_dir=ANNOTATION_DIR,
+    index=f"{ANNOTATION_DIR}/BOWTIE2Index_chr/genome",
+    chr_sizes=f"{ANNOTATION_DIR}/reChr.sizes",
     raw_dir="data/common/01_raw_atac_nonencode/jurkat",
     out_dir="data/common/02_merged_atac"
   threads: 4
@@ -487,7 +484,7 @@ rule common_process_nonencode_atac_jurkat:
       exec 2>>{log} 
       mkdir -p {params.raw_dir}
       bash src/preprocessing/downloadFromSraRunTable.sh data/common/SraRunTable_Jurkat.csv {params.raw_dir}
-      bash src/preprocessing/analysis.sh {params.raw_dir} "data/annotation/truseqPE.fa" {params.out_dir} {params.index} {params.chr_sizes} "Jurkat"
+      bash src/preprocessing/analysis.sh {params.raw_dir} f"{params.annotation_dir}/truseqPE.fa" {params.out_dir} {params.index} {params.chr_sizes} "Jurkat"
       cp data/common/02_merged_atac/merged_Jurkat.bam data/common/01_raw_atac/merged_Jurkat.bam
     """
     
@@ -497,8 +494,9 @@ rule common_process_nonencode_atac_h1:
   output:
      proc_atac_jurkat="data/common/02_merged_atac/merged_H1.bam",  #TODO: wrap in temp()
   params:
-    index="data/annotation/BOWTIE2Index_chr/genome",
-    chr_sizes="data/annotation/reChr.sizes",
+    annotation_dir=ANNOTATION_DIR,
+    index=f"{ANNOTATION_DIR}/BOWTIE2Index_chr/genome",
+    chr_sizes=f"{ANNOTATION_DIR}/reChr.sizes",
     raw_dir="data/common/01_raw_atac_nonencode/h1",
     out_dir="data/common/02_merged_atac"
   threads: 4
@@ -510,7 +508,7 @@ rule common_process_nonencode_atac_h1:
       exec 2>>{log} 
       mkdir -p {params.raw_dir}
       bash src/preprocessing/downloadFromSraRunTable.sh data/common/SraRunTable_H1.csv {params.raw_dir}
-      bash src/preprocessing/analysis.sh {params.raw_dir} "data/annotation/truseqPE.fa" {params.out_dir} {params.index} {params.chr_sizes} "H1"
+      bash src/preprocessing/analysis.sh {params.raw_dir} f"{params.annotation_dir}/truseqPE.fa" {params.out_dir} {params.index} {params.chr_sizes} "H1"
       cp data/common/02_merged_atac/merged_H1.bam data/common/01_raw_atac/merged_H1.bam    
     """    
 
@@ -520,8 +518,9 @@ rule common_process_nonencode_atac_hela:
   output:
      proc_atac_jurkat="data/common/02_merged_atac/merged_HeLa-S3.bam", #TODO: wrap in temp()
   params:
-    index="data/annotation/BOWTIE2Index_chr/genome",
-    chr_sizes="data/annotation/reChr.sizes",
+    annotation_dir=ANNOTATION_DIR,
+    index=f"{ANNOTATION_DIR}/BOWTIE2Index_chr/genome",
+    chr_sizes=f"{ANNOTATION_DIR}/reChr.sizes",
     raw_dir="data/common/01_raw_atac_nonencode/hela",
     out_dir="data/common/02_merged_atac"
   threads: 4
@@ -533,7 +532,7 @@ rule common_process_nonencode_atac_hela:
       exec 2>>{log} 
       mkdir -p {params.raw_dir}
       bash src/preprocessing/downloadFromSraRunTable.sh data/common/SraRunTable_HeLa_S3.csv {params.raw_dir}
-      bash src/preprocessing/analysis.sh {params.raw_dir} "data/annotation/truseqPE.fa" {params.out_dir} {params.index} {params.chr_sizes} "HeLa-S3"
+      bash src/preprocessing/analysis.sh {params.raw_dir} f"{params.annotation_dir}/truseqPE.fa" {params.out_dir} {params.index} {params.chr_sizes} "HeLa-S3"
       cp data/common/02_merged_atac/merged_HeLa-S3.bam data/common/01_raw_atac/merged_HeLa-S3.bam  
     """    
     
@@ -595,7 +594,7 @@ rule common_remove_blacklisted_atac_peaks:
   output:
     filtered_peaks="data/common/03_peaks_atac/filtered_merged_{cellularContext}_peaks.narrowPeak",
   params:
-    blacklistPath="data/annotation/blacklist.bed"
+    blacklistPath=f"{ANNOTATION_DIR}/blacklist.bed"
   threads: 4
   benchmark: "benchmarks/preprocessing/remove_blacklisted_atac_peaks_{cellularContext}.tsv"
   log: "logs/preprocessing/remove_blacklisted_atac_peaks_{cellularContext}.log"
@@ -631,14 +630,11 @@ checkpoint common_get_combinations:
   benchmark: "benchmarks/preprocessing/get_combinations.tsv"
   log: "logs/preprocessing/get_combinations.log"
   threads: 1
-  container: "Training_Prediction/tfbench-preproc.sif"
+  container: "tfbench-preproc.sif"
   script: "src/preprocessing/get_combinations.R"
 
 if "maxATAC" in METHODS:
   include: op.join("rules", "maxATAC.smk") 
-  
-if "Catchitt" in METHODS:
-  include: op.join("rules", "Catchitt.smk") 
 
 if "BMO" in METHODS:
   include: op.join("rules", "BMO.smk") 
@@ -656,9 +652,9 @@ rule Common_get_matches_genome:
     html="output/FIMO/01_motif_matches_all.html",
   params:
     script=prefix_path("src/FIMO/01_motif_matches.Rmd"),
-    motif_models=prefix_path("data/annotation/motif_models.rds"),
-    refPath=prefix_path("data/annotation/Homo_sapiens.GRCh38.dna.primary_assembly.fa"),
-    dhsPath="",
+    motif_models=f"{ANNOTATION_DIR}/motif_models.rds",
+    refPath=f"{ANNOTATION_DIR}/Homo_sapiens.GRCh38.dna.primary_assembly.fa",
+    dhsPath=f"{ANNOTATION_DIR}/dhs.bed",
     tfsSub=TFSUB,
     fimo_out_dir=prefix_path("output/FIMO"),
     out_dir=prefix_path("data/motifs/motif_matches_genome"),
@@ -675,13 +671,13 @@ rule Common_get_matches_genome:
         export MEME_PATH="$(which fimo)"
         Rscript -e 'rmarkdown::render("{params.script}", 
                                       "html_document", 
-                                       output_file="../../{output.html}",
+                                       output_file=file.path("../../..", "{output.html}"),
                                        params=list(motif_models="{params.motif_models}",
                                                    tfs="{params.tfsSub}",
-                                                   combs_dir="{input.combs}",
+                                                   combs_dir=file.path("../../..","{input.combs}"),
                                                    refPath="{params.refPath}",
                                                    dhsPath="{params.dhsPath}",
-                                                   outDir="{params.out_dir}",
+                                                   outDir=file.path("../../..", "{params.out_dir}"),
                                                    thresh="{params.thresh}"))'
     """
     
@@ -692,9 +688,9 @@ rule Common_get_matches_dhs:
     html="output/FIMO/01_motif_matches_DHS.html",
   params:
     script=prefix_path("src/FIMO/01_motif_matches.Rmd"),
-    motif_models=prefix_path("data/annotation/motif_models.rds"),
-    refPath=prefix_path("data/annotation/Homo_sapiens.GRCh38.dna.primary_assembly.fa"),
-    dhsPath=prefix_path("data/annotation/dhs.bed"),
+    motif_models=f"{ANNOTATION_DIR}/motif_models.rds",
+    refPath=f"{ANNOTATION_DIR}/Homo_sapiens.GRCh38.dna.primary_assembly.fa",
+    dhsPath=f"{ANNOTATION_DIR}/dhs.bed",
     tfsSub=TFSUB,
     fimo_out_dir=prefix_path("output/FIMO"),
     out_dir=prefix_path("data/motifs/motif_matches_dhs"),
@@ -711,13 +707,13 @@ rule Common_get_matches_dhs:
         export MEME_PATH="$(which fimo)"
         Rscript -e 'rmarkdown::render("{params.script}", 
                                       "html_document", 
-                                       output_file="../../{output.html}",
+                                       output_file=file.path("../../..", "{output.html}"),
                                        params=list(motif_models="{params.motif_models}",
                                                    tfs="{params.tfsSub}",
-                                                   combs_dir="{input.combs}",
+                                                   combs_dir=file.path("../../..", "{input.combs}"),
                                                    refPath="{params.refPath}",
                                                    dhsPath="{params.dhsPath}",
-                                                   outDir="{params.out_dir}",
+                                                   outDir=file.path("../../..", "{params.out_dir}"),
                                                    thresh="{params.thresh}"))'
     """
     
@@ -735,6 +731,7 @@ rule common_export_prediction_paths:
     predictions=all_prediction_files
   output:
     listfile="all_prediction_list.txt"
+  log: "logs/preprocessing/export_prediction_paths.log"
   run:
     print(os.getcwd())
     print(f"Exporting prediction file path to {output}...")

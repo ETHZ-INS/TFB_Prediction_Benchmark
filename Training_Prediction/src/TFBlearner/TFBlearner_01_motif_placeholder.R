@@ -7,6 +7,10 @@ library(BiocParallel)
 library(universalmotif)
 library(TFBSTools)
 
+log <- file(snakemake@log[[1]], open="wt")
+sink(log, type="output")
+sink(log, type="message")
+
 setDTthreads(as.integer(snakemake@threads))
 motifModels <- readRDS(snakemake@params[["motif_models_path"]])
 outDir <- snakemake@params[["out_dir"]]

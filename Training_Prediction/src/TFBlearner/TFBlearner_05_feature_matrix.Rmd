@@ -5,6 +5,7 @@ date: "2025-03-13"
 params: 
   outDir: "data"
   tfName: "ATF3"
+  combinationsPath: "data/04_train_test_combinations.tsv"
   cofactorMapPath: "cofactorMap"
   computeProfile: TRUE
   profilesDir: "insertion_profiles"
@@ -14,7 +15,7 @@ params:
 ---
 
 
-```{r setup, include=FALSE, error=TRUE}
+```{r setup, include=FALSE}
 library(BSgenome.Hsapiens.UCSC.hg38)
 library(EnsDb.Hsapiens.v86)
 library(phastCons100way.UCSC.hg38)
@@ -44,9 +45,13 @@ tfCofactors <- tfCofactors[!is.na(tfCofactors)]
 tfCofactors <- intersect(tfCofactors, colnames(experiments(mae)$Motifs))
 
 valContexts <- unique(subset(sampleMap(mae), isTesting)$primary)
-allContexts <- getContexts(mae, tfName=tfName, which="Both")
-trainingContexts <- setdiff(allContexts, valContexts)
-valTfContexts <- intersect(valContexts, allContexts)
+trainContexts  <- unique(subset(sampleMap(mae), isTraining)$primary)
+combinations <- fread(params$combinationsPath)
+testData <- subset(combinations, set=="testData")
+valTfContexts <- intersect(subset(testData, TF==tfName)$CellularContext, 
+                           valContexts)
+trainData <- subset(combinations, set=="trainData")
+trainTfContexts <- unique(subset(trainData, TF==tfName)$CellularContext)
 ```
 
 # Training
@@ -59,8 +64,8 @@ mae <- tfFeatures(mae, tfName=tfName,
                   nPatterns=50)
 ```
 
-```{r, context-tf-features, error=TRUE}
-profilePath <- file.path("../..", params$profilesDir, paste(tfName, "median.rds", sep="_"))
+```{r, context-tf-features}
+profilePath <- file.path(params$profilesDir, paste(tfName, "median.rds", sep="_"))
 
 if(computeProfile | !file.exists(profilePath)){
   motifPath <- subset(colData(mae[[TFBlearner:::MOTIFEXP]]), 
@@ -71,7 +76,7 @@ if(computeProfile | !file.exists(profilePath)){
   seqlevelsStyle(motifRanges) <- "UCSC"
 
   atacFragFilePaths <- unlist(subset(colData(mae[[TFBlearner:::ATACEXP]]),
-                                     context %in% trainingContexts)$origin)
+                                     context %in% trainContexts)$origin)
   baseDir <- metadata(colData(mae[[TFBlearner:::ATACEXP]]))[[TFBlearner:::BASEDIRCOL]]
   atacFragPaths <- file.path(baseDir, atacFragFilePaths)
   names(atacFragPaths) <- names(atacFragFilePaths)
@@ -85,19 +90,35 @@ if(computeProfile | !file.exists(profilePath)){
   names(profile) <- tfName 
 }
 
-mae <- contextTfFeatures(mae, tfName=tfName, 
-                         whichCol="All",
-                         addLabels=TRUE, 
-                         seed=seed,
-                         insertionProfile=profile)
+# mae <- contextTfFeatures(mae, tfName=tfName,
+#                               whichCol="All",
+#                               addLabels=TRUE,
+#                               seed=seed,
+#                               insertionProfile=profile)
+
+maeTrain <- contextTfFeatures(mae, tfName=tfName,
+                              whichCol="Col",
+                              colSel=trainTfContexts,
+                              addLabels=TRUE,
+                              seed=seed,
+                              insertionProfile=profile)
+# saveRDS("test", file.path(outDir, "test_con.rds"))
+maeTest <- contextTfFeatures(mae, tfName=tfName,
+                             whichCol="Col",
+                             colSel=valTfContexts,
+                             addLabels=FALSE,
+                             seed=seed,
+                             insertionProfile=profile)
+# saveRDS("test", file.path(outDir, "test_con.rds"))
 ```
 
 ### Compile Feature-Matrix
 
-```{r, feature matrix, error=TRUE}
+```{r, feature matrix}
 if(!dir.exists(outDir)) dir.create(outDir)
-fmTrain <- getFeatureMatrix(mae, tfName=tfName, 
-                            whichCol="OnlyTrain", 
+fmTrain <- getFeatureMatrix(maeTrain, tfName=tfName, 
+                            whichCol="Col", 
+                            colSel=trainTfContexts,
                             addLabels=TRUE, 
                             outDir=outDir,
                             norm="robust", 
@@ -107,18 +128,15 @@ fmTrain <- getFeatureMatrix(mae, tfName=tfName,
 base::saveRDS(fmTrain, file.path(outDir, 
                                  paste(tfName, "fmTrainSe.rds", sep="_")))
 
-fmTest <- getFeatureMatrix(mae, tfName=tfName, 
+fmTest <- getFeatureMatrix(maeTest, tfName=tfName, 
                            whichCol="Col", 
                            colSel=valTfContexts,
-                           addLabels=TRUE, 
-                           outDir=outDir,
+                           addLabels=FALSE, 
                            norm="robust",
                            prefix="test",
-                           saveHdf5=TRUE,
+                           saveHdf5=FALSE,
                            convertInteger=FALSE)
-
-base::saveRDS(fmTest, file.path(outDir, 
-                                paste(tfName, "fmTestSe.rds", sep="_")))
+base::saveRDS(fmTest, file.path(outDir, paste(tfName, "fmTestSe.rds", sep="_")))
 ```
 
 ```{r, session info}

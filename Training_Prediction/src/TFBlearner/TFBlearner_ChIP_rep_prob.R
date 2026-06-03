@@ -2,15 +2,22 @@ library(data.table)
 library(gam)
 library(GenomicRanges)
 
-args = commandArgs(trailingOnly=TRUE)
-chIPPeaksPath <- args[1]
-gamPath <- args[2]
-dhsPath <- args[3]
-outDir <- args[4]
-nonconsChIPPeaksPath <- args[5]
+log <- file(snakemake@log[[1]], open="wt")
+sink(log, type="output")
+sink(log, type="message")
+
+chIPPeaksPath <- snakemake@input[["merged_chip_peaks"]]
+gamPath <- snakemake@input[["gam"]]
+dhsPath <- snakemake@input[["dhs_coords"]]
+nonconsChIPPeaksPath <- snakemake@input[["noncons_chip_peaks"]]
+outPath <- snakemake@output[["chip_labels"]]
+
+# Ensure outDir exists
+outDir <- dirname(outPath)
+if(!dir.exists(outDir)) dir.create(outDir, recursive=TRUE)
 
 modRep <- readRDS(gamPath)
-refCoords <- fread(dhsPath, col.names=c("chr", "start", "end", "width", "strand"))
+refCoords <- fread(dhsPath, col.names=c("chr", "start", "end"))
 refCoords <- makeGRangesFromDataFrame(as.data.frame(refCoords))
 labelDt <- fread(chIPPeaksPath, col.names=c("chr", "start", "end", "qValue"))
 
@@ -54,8 +61,4 @@ uncertainPeaksDt$is_uncertain <- TRUE
 # does not really matter as its marked as uncertain and removed from training
 uncertainPeaksDt$rep_prob <- 1 
 labelDt <- rbind(labelDt, uncertainPeaksDt, use.names=TRUE, fill=TRUE)
-
-write.table(labelDt, file.path(outDir, 
-                               paste0(paste("labels", tf, 
-                                            context, sep="_"), ".tsv")), 
-            row.names=FALSE, quote=FALSE, sep="\t")
+write.table(labelDt, outPath, row.names=FALSE, quote=FALSE, sep="\t")

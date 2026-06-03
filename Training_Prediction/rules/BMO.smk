@@ -1,3 +1,6 @@
+import os
+ANNOTATION_DIR = os.path.abspath(config.get("global", {}).get("annotation_dir", "data/annotation"))
+
 os.makedirs('data/BMO', exist_ok=True)
 
 def bmo_targets(ckpt):
@@ -44,7 +47,7 @@ rule BMO_download:
 rule BMO_prepare_motif_txt:
   input:
     combinations="data/common/04_train_test_combinations.tsv",
-    motif_models="data/annotation/motif_models.rds"
+    motif_models=f"{ANNOTATION_DIR}/motif_models.rds"
   params:
     out_dir="data/BMO"
   log: "logs/BMO/prepare_motif_{cellularContext}_txt.log"
@@ -53,7 +56,7 @@ rule BMO_prepare_motif_txt:
   threads: 1
   output:
     motif_list="data/BMO/motif_{cellularContext}.txt"
-  script: "../src/utils/BMO/BMO_prepare_motif_list.R"
+  script: "../src/BMO/BMO_prepare_motif_list.R"
   
 rule BMO_prepare_config:
   input:
@@ -65,8 +68,8 @@ rule BMO_prepare_config:
     atac_peak_dir="data/common/03_peaks_atac/filtered_merged_{cellularContext}_peaks.narrowPeak",
   params:
     config_yaml="/opt/BMO/config/config.yaml",
-    motif_dir="data/motifs/motif_matches_genome",
-    pred_dir="predictions/BMO",
+    motif_dir="Training_Prediction/data/motifs/motif_matches_genome",
+    pred_dir="Training_Prediction/predictions/BMO",
     out_dir="data/BMO",
     bmo_dir="/opt/BMO", # src/BMO
   threads: 4
@@ -75,7 +78,7 @@ rule BMO_prepare_config:
   output: 
     config_yaml="data/BMO/input_{cellularContext}_config.yaml"
   container: "tfbench-bmo.sif"
-  script: "../src/utils/BMO/BMO_prepare_config.R"
+  script: "../src/BMO/BMO_prepare_config.R"
 
 rule BMO_run_analysis:
   input:
@@ -86,15 +89,16 @@ rule BMO_run_analysis:
     cellularContext="[^./]+"
   params:
     snakefile="/opt/BMO/Snakefile",
-    out_dir="predictions/BMO",
+    out_dir="Training_Prediction/predictions/BMO",
   threads: 4
   log: "logs/BMO/run_analysis_{cellularContext}.log"
   benchmark: "benchmarks/BMO/train_pred_{cellularContext}.tsv"
   container: "tfbench-bmo.sif"
   shell:
     """
+      exec > {log} 2>&1
       mkdir -p {params.out_dir}/{wildcards.cellularContext}
-      snakemake -s {params.snakefile} -d "$PWD" -j {threads} --resources io_limit=2 --forceall --rerun-incomplete --configfile {input.config_yaml} &> {log}
+      snakemake -s {params.snakefile} -d "$PWD" -j {threads} --resources io_limit=2 --forceall --rerun-incomplete --configfile {input.config_yaml}
     """
     # -d {params.inner_wd}
     
@@ -108,5 +112,6 @@ rule BMO_move_results:
   log: "logs/BMO/move_results_{tf}_{cellularContext}.log"
   shell:
     """
-      mv {input.predictions}/bmo/{wildcards.cellularContext}/all/{wildcards.tf}.all.bed {output.prediction} &> {log}
+      exec > {log} 2>&1
+      mv {input.predictions}/bmo/{wildcards.cellularContext}/all/{wildcards.tf}.all.bed {output.prediction}
     """

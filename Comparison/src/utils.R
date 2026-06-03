@@ -1,12 +1,12 @@
 getPRStats <- function(dt,
-                        scores="score",
-                        labels="cond",
-                        models=NULL,
-                        posClass="pos",
-                        negClass="neg",
-                        subSample=FALSE,
-                        aggregate=FALSE,
-                        seed=42){
+                       scores="score",
+                       labels="cond",
+                       models=NULL,
+                       posClass="pos",
+                       negClass="neg",
+                       subSample=FALSE,
+                       aggregate=FALSE,
+                       seed=42){
   set.seed(seed)
   dt <- as.data.table(dt)
   

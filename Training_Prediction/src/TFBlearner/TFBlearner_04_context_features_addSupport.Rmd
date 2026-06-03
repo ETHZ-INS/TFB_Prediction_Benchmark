@@ -1,17 +1,18 @@
 ---
 title: "Context-Features TFBlearner"
 output: html_document
-date: "2025-03-13"
 params: 
-  outPath: "data/TFBlearner/mae_addSupport_context.rds"
-  outDir: "data/02_TFBlearner_object"
-  maePath: "02_mae_site.rds"
+  outPath: ""
+  outDir: ""
+  maePath: ""
+  addAssocPath: ""
+  maeAddSuportPath: ""
   seed: 43
-  threads: 16
+  threads: 4
 ---
 
 
-```{r setup, include=FALSE, error=TRUE}
+```{r setup, include=FALSE}
 library(BSgenome.Hsapiens.UCSC.hg38)
 library(EnsDb.Hsapiens.v86)
 library(phastCons100way.UCSC.hg38)
@@ -31,16 +32,17 @@ setDTthreads(as.integer(params$threads))
 
 ```{r, context-features - additional support object}
 outDir <- params$outDir
-
+maeFull <- readRDS(params$maeAddSuportPath)
 mae <- readRDS(params$maePath)
 valContexts <- unique(subset(sampleMap(mae),isTesting)$primary)
+
 mae <- panContextFeatures(mae, seed=seed, saveHdf5=TRUE, outDir=outDir)
 
 chIPSe <- experiments(mae)$ChIP
 chIPMap <- data.frame(primary=colData(chIPSe)[["context"]],
                       colname=colData(chIPSe)[["combination"]],
                       stringsAsFactors=FALSE)
-allContexts <- unique(colData(chIPSe)$context)
+allContexts <- unique(c(colData(chIPSe)$context, valContexts))
 
 atacSe <- experiments(mae)$ATAC
 atacMap <- data.frame(primary=colData(atacSe)[["context"]],
@@ -70,16 +72,24 @@ actMap <- data.frame(primary=colnames(actSe),
 
 # Add association data of full object ------------------------------------------
 
-maeFull <- readRDS("../../data/TFBlearner/addSupport/maeAddSupport.rds")
-assocSe <- experiments(maeFull)$Activity.Association
-assocSe <- IRanges::subsetByOverlaps(assocSe, rowRanges(mae[["ATAC"]]), type = "equal")
-assocMap <- data.frame(primary=rep(allContexts, ncol(assocSe)),
-                       colname=rep(colnames(assocSe),
+addAssocPath <- params$addAssocPath
+addAssocData <- HDF5Array(filepath=addAssocPath, 
+                          name=TFBlearner:::ASSOCASSAY)
+assayList <- list(addAssocData)
+names(assayList) <- TFBlearner:::ASSOCASSAY
+assocSeAdd <- SummarizedExperiment(assays=assayList, 
+                                   colData=colData(maeFull[[TFBlearner:::ASSOCEXP]]), 
+                                   rowRanges=rowRanges(maeFull[[TFBlearner:::ASSOCEXP]]))
+assocSeAdd <- IRanges::subsetByOverlaps(assocSeAdd, 
+                                        rowRanges(mae[["ATAC"]]), type = "equal")
+
+assocMap <- data.frame(primary=rep(allContexts, ncol(assocSeAdd)),
+                       colname=rep(colnames(assocSeAdd),
                                    each=length(allContexts)))
 
 # ------------------------------------------------------------------------------
 
-objList <- list(atacSe, atacPromSe, chIPSe, motifsSe, siteSe, actSe, assocSe)
+objList <- list(atacSe, atacPromSe, chIPSe, motifsSe, siteSe, actSe, assocSeAdd)
 names(objList) <- c("ATAC", "ATAC.Promoters", "ChIP", "Motifs", "siteFeat",
                     "chromVAR.Activity", "Activity.Association")
 
@@ -87,9 +97,7 @@ listMap <- list(atacMap, atacPromMap, chIPMap, motifMap, siteMap, actMap, assocM
 names(listMap) <- c("ATAC", "ATAC.Promoters", "ChIP", "Motifs", "siteFeat",
                     "chromVAR.Activity", "Activity.Association")
 dfMap <- listToMap(listMap)
-
-annoData <- data.frame(row.names=allContexts)
-annoData[["context"]] <- unique(colData(chIPSe)$context)
+annoData <- data.frame(row.names=allContexts, context=allContexts)
 
 # create mae with additional support
 mae <- MultiAssayExperiment(experiments=objList, 

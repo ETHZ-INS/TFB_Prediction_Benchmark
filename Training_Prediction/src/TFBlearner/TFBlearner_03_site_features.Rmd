@@ -29,11 +29,11 @@ setDTthreads(as.integer(params$threads))
 
 ## Load annotation data
 
-```{r, load basic object, error=TRUE}
+```{r, load basic object}
 mae <- readRDS(params$maePath)
 ```
 
-```{r, load annotation data, error=TRUE}
+```{r, load annotation data}
 fpPath <- params$footprintPath
 embPath <- params$embPath
 outDir <- params$outDir
@@ -55,7 +55,7 @@ names(embDts) <- colnames(emb)
 annoData <- append(embDts, list("footprint_score"=fpData))
 ```
 
-```{r, load distance to nearest TSS, error=TRUE}
+```{r, load distance to nearest TSS}
 coords <- rowRanges(mae[["ATAC"]])
 tss <- GenomicRanges::GPos(seqnames=seqnames(rowRanges(mae[["ATAC.Promoters"]])),
                            pos=mid(rowRanges(mae[["ATAC.Promoters"]])))
@@ -68,13 +68,13 @@ annoData <- append(annoData, list("distTSS"=distDt))
 
 ## Compute site features
 
-```{r, compute site-features, error=TRUE}
+```{r, compute site-features}
 mae <- siteFeatures(mae, annoData=annoData, 
                     scoreCols=c(rep("score", length(embDts)), 
                                     "mean_signal", "distTSS"), 
                     minoverlap=1, shift=FALSE)
 
-saveRDS(mae, file.path("..", params$outPath))
+saveRDS(mae, params$outPath)
 ```
 
 ```{r, session info}

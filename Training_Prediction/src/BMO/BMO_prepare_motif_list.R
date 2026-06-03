@@ -1,5 +1,10 @@
 library(data.table)
 
+log <- file(snakemake@log[[1]], open="wt")
+sink(log, type="output")
+sink(log, type="message")
+
+
 motifModels <- readRDS(snakemake@input[["motif_models"]])
 outPath <- snakemake@output[["motif_list"]]
 combs <- fread(snakemake@input[["combinations"]])

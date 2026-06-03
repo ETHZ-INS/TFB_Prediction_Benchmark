@@ -1,13 +1,18 @@
 library(data.table)
 library(yaml)
 
+log <- file(snakemake@log[[1]], open="wt")
+sink(log, type="output")
+sink(log, type="message")
+
+
 outFile <- snakemake@output[["config_yaml"]]
 combinations <- fread(snakemake@input[["combinations"]])
 testCombinations <- subset(combinations, set=="testData")
 
 configPath <- snakemake@params[["config_yaml"]]
 config <- read_yaml(configPath)
-cellularContext <- unlist(tstrsplit(outFile, split="_", keep=2))
+cellularContext <- snakemake@wildcards[["cellularContext"]]
 
 if(!dir.exists(dirname(outFile))) dir.create(dirname(outFile))
 

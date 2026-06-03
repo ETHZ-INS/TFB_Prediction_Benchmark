@@ -1,3 +1,6 @@
+import os
+ANNOTATION_DIR = os.path.abspath(config.get("global", {}).get("annotation_dir", "data/annotation"))
+
 import pandas as pd
 
 os.makedirs('data/maxATAC', exist_ok=True)
@@ -76,10 +79,10 @@ rule maxATAC_download_annotation_data:
   benchmark: "benchmarks/maxATAC/prep_download_annotation_data.tsv"
   log: "logs/maxATAC/download_annotation_data.log"
   params:
-    data_dir="data/maxATAC",
+    data_dir=prefix_path("data/maxATAC"),
   threads: 1
   shell:
-    r"""
+    """
       export HOME="$PWD"
       mkdir -p "$HOME/opt"
       maxatac data --output "$HOME/opt" &> "{log}"
@@ -93,10 +96,10 @@ rule maxATAC_prepare_atac:
   output:
     bw="data/maxATAC/01_prepared_atac/{accession}_IS_slop20_RP20M.bw"
   params:
-    out_dir="data/maxATAC/01_prepared_atac",
-    blacklist_bed="data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bed",
-    blacklist_bw="data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bw",
-    chrom_size="data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes",
+    out_dir=prefix_path("data/maxATAC/01_prepared_atac"),
+    blacklist_bed=prefix_path("data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bed"),
+    blacklist_bw=prefix_path("data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bw"),
+    chrom_size=prefix_path("data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes"),
     train_chrs=AUT_CHRS
   threads: 4
   benchmark: "benchmarks/maxATAC/prep_prepare_atac_{accession}.tsv"
@@ -121,8 +124,8 @@ rule maxATAC_average_atac:
     output:
       averaged_bw="data/maxATAC/02_averaged_atac/{CellularContext}.bw"
     params:
-      merged_dir="data/maxATAC/02_averaged_atac",
-      chrom_size="data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes",
+      merged_dir=prefix_path("data/maxATAC/02_averaged_atac"),
+      chrom_size=prefix_path("data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes"),
       train_chrs=AUT_CHRS
     benchmark: "benchmarks/maxATAC/prep_average_atac_{CellularContext}.tsv"
     log: "logs/maxATAC/average_atac_{CellularContext}.log"
@@ -145,9 +148,9 @@ rule maxATAC_normalize_atac:
     output:
       norm_bw="data/maxATAC/03_normalized_atac/{CellularContext}_minmax.bw"
     params:
-      out_dir="data/maxATAC/03_normalized_atac",
-      chrom_size="data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes",
-      blacklist_bw="data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bw",
+      out_dir=prefix_path("data/maxATAC/03_normalized_atac"),
+      chrom_size=prefix_path("data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes"),
+      blacklist_bw=prefix_path("data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bw"),
       train_chrs=AUT_CHRS
     benchmark: "benchmarks/maxATAC/prep_normalize_atac_{CellularContext}.tsv"
     log: "logs/maxATAC/normalize_atac_{CellularContext}.log"
@@ -174,9 +177,8 @@ rule maxATAC_convert_chip_coverage_tracks:
   output:
     bw_file="data/maxATAC/01_prepared_chip/{accession}.bw",
   params:
-    out_dir="data/maxATAC/01_prepared_chip",
-    chrom_size="data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes",
-    autosomes_path="data/annotation/autosomes.bed",
+    out_dir=prefix_path("data/maxATAC/01_prepared_chip"),
+    chrom_size=prefix_path("data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes"),
   benchmark: "benchmarks/maxATAC/prep_convert_chip_coverage_tracks_{accession}.tsv"
   log: "logs/maxATAC/convert_chip_coverage_tracks_{accession}.log"
   container: "tfbench-maxatac.sif",
@@ -198,8 +200,8 @@ rule maxATAC_average_chip_coverage_tracks:
   output:
     averaged_bw="data/maxATAC/02_averaged_chip/{comb}.bw"
   params:
-    out_dir="data/maxATAC/02_averaged_chip",
-    chrom_size="data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes",
+    out_dir=prefix_path("data/maxATAC/02_averaged_chip"),
+    chrom_size=prefix_path("data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes"),
     train_chrs=AUT_CHRS
   benchmark: "benchmarks/maxATAC/prep_average_chip_coverage_tracks_{comb}.tsv"
   log: "logs/maxATAC/average_chip_coverage_tracks_{comb}.log"
@@ -222,9 +224,9 @@ rule maxATAC_normalize_chip_coverage_tracks:
   output:
     norm_bw="data/maxATAC/03_normalized_chip/{comb}_minmax.bw"
   params:
-    out_dir="data/maxATAC/03_normalized_chip",
-    chrom_size="data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes",
-    blacklist_bw="data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bw",
+    out_dir=prefix_path("data/maxATAC/03_normalized_chip"),
+    chrom_size=prefix_path("data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes"),
+    blacklist_bw=prefix_path("data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bw"),
     train_chrs=AUT_CHRS
   benchmark: "benchmarks/maxATAC/prep_normalize_chip_coverage_tracks_{comb}.tsv"
   log: "logs/maxATAC/normalize_chip_coverage_tracks_{comb}.log"
@@ -249,8 +251,9 @@ rule maxATAC_prepare_metadata:
     combinations="data/common/04_train_test_combinations.tsv",
   params:
     holdout=HOLDOUT,
-    out_dir="data/maxATAC/metadata",
-    out_dir_report="output/maxATAC",
+    script=prefix_path("src/maxATAC/01_metaData_maxATAC.Rmd"),
+    out_dir=prefix_path("data/maxATAC/metadata"),
+    out_dir_report=prefix_path("output/maxATAC"),
   benchmark: "benchmarks/maxATAC/prepare_{HOLDOUT}_metadata.tsv"
   output:
     meta_report="output/maxATAC/01_metaData_{HOLDOUT}_maxATAC.html"
@@ -262,7 +265,7 @@ rule maxATAC_prepare_metadata:
       exec 2>>{log} 
       mkdir -p {params.out_dir}
       mkdir -p {params.out_dir_report}
-      Rscript -e 'rmarkdown::render("src/utils/maxATAC/01_metaData_maxATAC.Rmd", 
+      Rscript -e \'rmarkdown::render("{params.script}", 
                                       "html_document", 
                                        output_file="../../../{output.meta_report}",
                                        params=list(outDir="{params.out_dir}",
@@ -282,16 +285,15 @@ rule maxATAC_train:
   container: 
     lambda wc: "tfbench-maxatac_gpu.sif" if int(wc.EPOCHS) >= 100 else "tfbench-maxatac.sif"
   resources:
-    gpu=lambda wc, attempt: 1 if config["maxatac_epochs"] >= 100 else 0, #TODO: do also for the image used
-  #container: "tfbench-maxatac_gpu.sif",
+    gpu=lambda wc, attempt: 1 if config["maxatac_epochs"] >= 100 else 0,
   params:
     genome="hg38",
     holdout=HOLDOUT,
-    model_dir="models/maxATAC/{HOLDOUT}/{EPOCHS}/all",
-    meta_dir="data/maxATAC/metadata",
-    sequence="data/maxATAC/maxatac/data/hg38/hg38.2bit",
-    blacklist="data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bed",
-    chrom_sizes="data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes",
+    model_dir=prefix_path("models/maxATAC/{HOLDOUT}/{EPOCHS}/all"),
+    meta_dir=prefix_path("data/maxATAC/metadata"),
+    sequence=prefix_path("data/maxATAC/maxatac/data/hg38/hg38.2bit"),
+    blacklist=prefix_path("data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bed"),
+    chrom_sizes=prefix_path("data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes"),
     epochs=EPOCHS,
     train_chrs=AUT_CHRS,
     seed=SEED,
@@ -300,6 +302,16 @@ rule maxATAC_train:
   threads: 4,
   shell:
     """
+      if [ {params.epochs} -ge 100 ]; then
+        export TF_FORCE_GPU_ALLOW_GROWTH=true
+        # Wait for our turn to assign a GPU (staggered initialization)
+        while ! mkdir .gpu_assign_lock 2>/dev/null; do sleep 5; done
+        
+        export CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=memory.free,index --format=csv,nounits,noheader | sort -nr | head -1 | cut -d ',' -f 2 | xargs)
+        
+        # Release the lock in the background after 30s (giving TF time to allocate its memory buffer)
+        ( sleep 30; rmdir .gpu_assign_lock 2>/dev/null ) &
+      fi
       mkdir -p {params.model_dir}/{wildcards.tf}
       maxatac train --genome {params.genome} \
                     --sequence {params.sequence} \
@@ -315,7 +327,8 @@ rule maxATAC_train:
                     --threads {threads} \
                     --multiprocessing True &> {log}
     """
-    
+
+# keep more conservative blacklist file from maxATAC and remove all DHS overlapping for evaluation
 rule maxATAC_predict_all:
   input:
     models="models/maxATAC/{HOLDOUT}/{EPOCHS}/all/{tf}/best_epoch.txt",
@@ -323,11 +336,11 @@ rule maxATAC_predict_all:
     predictions="predictions/maxATAC/{HOLDOUT}/{EPOCHS}/all/{tf}/{context}_pred.bw",
   container: "tfbench-maxatac.sif",
   params:
-    chrom_sizes="data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes",
-    blacklist="data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bed",
-    sequence="data/maxATAC/maxatac/data/hg38/hg38.2bit",
-    out_dir="predictions/maxATAC/{HOLDOUT}/{EPOCHS}/all",
-    model_dir="models/maxATAC/{HOLDOUT}/{EPOCHS}/all",
+    chrom_sizes=prefix_path("data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes"),
+    blacklist=prefix_path("data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bed"),
+    sequence=prefix_path("data/maxATAC/maxatac/data/hg38/hg38.2bit"),
+    out_dir=prefix_path("predictions/maxATAC/{HOLDOUT}/{EPOCHS}/all"),
+    model_dir=prefix_path("models/maxATAC/{HOLDOUT}/{EPOCHS}/all"),
     val_chrs=VAL_CHRS
   resources:
     gpu=lambda wc, attempt: 1 if config["maxatac_epochs"] >= 100 else 0,
@@ -343,7 +356,7 @@ rule maxATAC_predict_all:
       mkdir -p {params.out_dir}
       export CUDA_VISIBLE_DEVICES=""; export OMP_NUM_THREADS={threads}; \
       maxatac predict --model "$model_name" \
-                      --signal data/maxATAC/03_normalized_atac/{wildcards.context}_minmax.bw \
+                      --signal Training_Prediction/data/maxATAC/03_normalized_atac/{wildcards.context}_minmax.bw \
                       --name {wildcards.context}_pred \
                       --output {params.out_dir}/{wildcards.tf} \
                       --chromosomes {params.val_chrs} \
@@ -364,12 +377,12 @@ rule maxATAC_predict_dhs:
   benchmark: "benchmarks/maxATAC/pred_dhs_{HOLDOUT}_{tf}_{context}_{EPOCHS}.tsv"
   log: "logs/maxATAC/predict_dhs_{HOLDOUT}_{tf}_{context}_{EPOCHS}.log"
   params:
-    dhs_regions="data/annotation/dhs.bed",
-    chrom_sizes="data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes",
-    blacklist="data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bed",
-    sequence="data/maxATAC/maxatac/data/hg38/hg38.2bit",
-    out_dir="predictions/maxATAC/{HOLDOUT}/{EPOCHS}/dhs",
-    model_dir="models/maxATAC/{HOLDOUT}/{EPOCHS}/all",
+    dhs_regions=f"{ANNOTATION_DIR}/dhs.bed",
+    chrom_sizes=prefix_path("data/maxATAC/maxatac/data/hg38/hg38.chrom.sizes"),
+    blacklist=prefix_path("data/maxATAC/maxatac/data/hg38/hg38_maxatac_blacklist.bed"),
+    sequence=prefix_path("data/maxATAC/maxatac/data/hg38/hg38.2bit"),
+    out_dir=prefix_path("predictions/maxATAC/{HOLDOUT}/{EPOCHS}/dhs"),
+    model_dir=prefix_path("models/maxATAC/{HOLDOUT}/{EPOCHS}/all"),
     val_chrs=VAL_CHRS,
   resources:
     gpu=lambda wc, attempt: 1 if config["maxatac_epochs"] >= 100 else 0,
@@ -383,13 +396,13 @@ rule maxATAC_predict_dhs:
       mkdir -p {params.out_dir}
       export CUDA_VISIBLE_DEVICES=""; export OMP_NUM_THREADS={threads}; \
       maxatac predict --model "$model_name" \
-                      --signal data/maxATAC/03_normalized_atac/{wildcards.context}_minmax.bw \
+                      --signal Training_Prediction/data/maxATAC/03_normalized_atac/{wildcards.context}_minmax.bw \
                       --name {wildcards.context}_pred \
                       --output {params.out_dir}/{wildcards.tf} \
+                      --blacklist {params.blacklist} \
                       --bed {params.dhs_regions} \
                       --chromosomes {params.val_chrs} \
                       --sequence {params.sequence} \
-                      --blacklist {params.blacklist} \
                       --chrom_sizes {params.chrom_sizes} \
                       --batch_size 3000 \
                       --threads {threads} \

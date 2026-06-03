@@ -31,15 +31,15 @@ for(tf in unique(trainSetsDt$TF)){
     setnames(metaDt, "CellularContext", "Cell_Line")
     
     metaDt[,Cell_Line:=as.character(Cell_Line)]
-    metaDt[,ATAC_Signal_File:=file.path("data/maxATAC/03_normalized_atac", 
+    metaDt[,ATAC_Signal_File:=file.path("Training_Prediction/data/maxATAC/03_normalized_atac", 
                                         paste(Cell_Line, "minmax.bw", sep="_"))]
-    metaDt[,ATAC_Peaks:=file.path("data/common/03_peaks_atac", 
+    metaDt[,ATAC_Peaks:=file.path("Training_Prediction/data/common/03_peaks_atac", 
                                           paste0("filtered_merged_", 
                                                  paste(Cell_Line, "peaks", sep="_"),
                                                  ".narrowPeak"))]
-    metaDt[,Binding_File:=file.path("data/maxATAC/03_normalized_chip", 
+    metaDt[,Binding_File:=file.path("Training_Prediction/data/maxATAC/03_normalized_chip", 
                                     paste(tf, Cell_Line, "minmax.bw", sep="_"))]
-    metaDt[,CHIP_Peaks:=file.path("data/common/02_merged_chip_peaks",
+    metaDt[,CHIP_Peaks:=file.path("Training_Prediction/data/common/02_merged_chip_peaks",
                                   paste0(paste("filtered_merged_peaks", 
                                                tf, Cell_Line, sep="_"),".bed"))]
     metaDt[,Train_Test_Label:="Train"]

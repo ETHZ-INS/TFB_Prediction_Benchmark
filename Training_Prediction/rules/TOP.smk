@@ -1,4 +1,7 @@
-os.makedirs('data/TOP', exist_ok=True)
+import os
+ANNOTATION_DIR = os.path.abspath(config.get("global", {}).get("annotation_dir", "data/annotation"))
+
+os.makedirs('Training_Prediction/data/TOP', exist_ok=True)
 
 # change here path to your bwtool install, in case of not using the container
 ######################################################################################
@@ -60,13 +63,13 @@ rule TOP_prepare_motif_matches:
   output:
     cand_sites="data/TOP/motif_matches/candidate_sites_{tf}.tsv",
   params:
-    black_list_path="data/annotation/blacklist.bed",
-    motif_match_dir="data/motifs/motif_matches_genome"
+    black_list_path=f"{ANNOTATION_DIR}/blacklist.bed",
+    motif_match_dir=prefix_path("data/motifs/motif_matches_genome")
   threads: 4
   benchmark: "benchmarks/TOP/prep_prepare_motif_matches_{tf}.tsv"
   log: "logs/TOP/prepare_motif_matches_{tf}.log"
   container: "tfbench-top.sif",
-  script: "../src/utils/TOP/TOP_process_candidate_sites.R"
+  script: "../src/TOP/TOP_process_candidate_sites.R"
   
 rule TOP_count_genome_cuts:
   input:
@@ -75,13 +78,13 @@ rule TOP_count_genome_cuts:
     atac_fwd_bw_file="data/TOP/atac_cut_counts/cuts_{cellularContext}.fwd.genomecounts.bw",
     atac_rev_bw_file="data/TOP/atac_cut_counts/cuts_{cellularContext}.rev.genomecounts.bw",
   params:
-    chrom_sizes="data/annotation/reChr.sizes",
-    out_dir="data/TOP/atac_cut_counts"
+    chrom_sizes=f"{ANNOTATION_DIR}/reChr.sizes",
+    out_dir=prefix_path("data/TOP/atac_cut_counts")
   benchmark: "benchmarks/TOP/prep_count_genome_cuts_{cellularContext}.tsv"
   log: "logs/TOP/count_genome_cuts_{cellularContext}.log"
   threads: 4
   container: "tfbench-top.sif",
-  script: "../src/utils/TOP/TOP_count_genome_cuts.R"
+  script: "../src/TOP/TOP_count_genome_cuts.R"
 
 rule TOP_normalize_count_matrix:
   input:
@@ -97,7 +100,7 @@ rule TOP_normalize_count_matrix:
   log: "logs/TOP/normalize_count_matrix_{tf}_{cellularContext}.log"
   threads: 4
   container: "tfbench-top.sif"
-  script: "../src/utils/TOP/TOP_normalize_count_matrix.R"
+  script: "../src/TOP/TOP_normalize_count_matrix.R"
 
 rule TOP_assemble_matrix_logistic:
   input:
@@ -110,7 +113,7 @@ rule TOP_assemble_matrix_logistic:
   log: "logs/TOP/assemble_matrix_logistic_{HOLDOUT}_{tf}_{cellularContext}.log"
   threads: 4
   container: "tfbench-top.sif",
-  script: "../src/utils/TOP/TOP_assemble_matrix.R"
+  script: "../src/TOP/TOP_assemble_matrix.R"
 
 rule TOP_train_logistic:
   input:
@@ -122,14 +125,14 @@ rule TOP_train_logistic:
     posterior_mean="models/TOP/{HOLDOUT}/TOP_mean_logistic.rds"
   params:
     seed=SEED,
-    out_dir="models/TOP/{HOLDOUT}/logistic",
-    feat_mat_dir="data/TOP/{HOLDOUT}/feature_matrix_logistic",
+    out_dir=prefix_path("models/TOP/{HOLDOUT}/logistic"),
+    feat_mat_dir=prefix_path("data/TOP/{HOLDOUT}/feature_matrix_logistic"),
     train_chrs=AUT_CHRS
   benchmark: "benchmarks/TOP/train_logistic_{HOLDOUT}.tsv"
   log: "logs/TOP/train_logistic_{HOLDOUT}.tsv"
   threads: 4
   container: "tfbench-top.sif",
-  script: "../src/utils/TOP/TOP_train_logistic.R"
+  script: "../src/TOP/TOP_train_logistic.R"
 
 rule TOP_predict_logistic:
   input:
@@ -139,9 +142,9 @@ rule TOP_predict_logistic:
   output:
     pred_file="predictions/TOP/{HOLDOUT}/logistic/pred_{tf}_{cellularContext}.rds"
   params:
-    out_dir="predictions/TOP/{HOLDOUT}/logistic",
+    out_dir=prefix_path("predictions/TOP/{HOLDOUT}/logistic"),
   benchmark: "benchmarks/TOP/pred_logistic_{HOLDOUT}_{tf}_{cellularContext}.tsv"
   log: "logs/TOP/predict_logistic_{HOLDOUT}_{tf}_{cellularContext}.tsv"
   threads: 4
   container: "tfbench-top.sif",
-  script: "../src/utils/TOP/TOP_pred_logistic.R"
+  script: "../src/TOP/TOP_pred_logistic.R"

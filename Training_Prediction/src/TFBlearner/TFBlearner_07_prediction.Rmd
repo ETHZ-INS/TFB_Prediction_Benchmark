@@ -59,7 +59,7 @@ preds <- predictTfBinding(mods, fmSubTest,
                           numThreads=threads,
                           BPPARAM=SerialParam())
 
-if(!dir.exists(file.path("..", outDir))) dir.create(file.path("..", outDir))
+if(!dir.exists(outDir)) dir.create(outDir, recursive=TRUE)
 saveRDS(preds, params$outPath)
 ```
 

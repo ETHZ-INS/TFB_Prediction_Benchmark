@@ -2,51 +2,179 @@ SEED = config["seed"]
 HOLDOUT = config["holdout"] 
 
 MODULE_PREFIX = config.get("module_prefix", "")
+ANNOTATION_DIR = config.get("annotation_dir", "data/annotation")
+
 def prefix_path(path):
     import os
     return os.path.join(MODULE_PREFIX, path) if MODULE_PREFIX else path
 
-'''
-rule compute_labels:
+rule comparison_compute_labels:
   input:
+    prediction_list="Training_Prediction/all_prediction_list.txt",
+    add_chip_data=f"{ANNOTATION_DIR}/ChIP_mapped.h5",
+    dhs_coords=f"{ANNOTATION_DIR}/dhs.bed",
+    mae_object=f"{ANNOTATION_DIR}/mae.rds",
+    combinations="Training_Prediction/data/common/04_train_test_combinations.tsv",
+    full_chr_motifs_report="Training_Prediction/output/FIMO/01_motif_matches_all.html",
+    dhs_motifs_report="Training_Prediction/output/FIMO/01_motif_matches_DHS.html",
   params:
-  threads:
+    chr_sizes=f"{ANNOTATION_DIR}/reChr.sizes", #TODO: Switch to inputs
+    bl_regions=f"{ANNOTATION_DIR}/blacklist.bed", #TODO: Switch to inputs
+    script_path=prefix_path("src/compute_labels.Rmd"),
+    out_report_dir=prefix_path("output"),
+    chip_dir="Training_Prediction/data/common/02_merged_chip_peaks",
+    motif_matches_dhs_dir="Training_Prediction/data/motifs/motif_matches_dhs",
+    motif_matches_genome_dir="Training_Prediction/data/motifs/motif_matches_genome",
+    out_dir=prefix_path("data"),
+    seed=SEED,
+  threads: 4
+  log: "logs/compute_labels.log"
   output:
+    html="output/compute_labels.html",
+    labels_dhs="data/labels.dhs.rds",
+    labels_full_chr="data/labels.fullChr.rds",
+    full_chr_bin_ranges="data/fullChrBinRanges.bed",
+    full_chr_overlaps="data/fullChrBinOvs.rds"
   shell:
     """
+      exec 2>>{log} 
+      mkdir -p {params.out_report_dir}
+      mkdir -p {params.out_dir}
       Rscript -e 'rmarkdown::render("{params.script_path}",
                                     "html_document",
                                     output_file="{output.html}",
                                     output_dir="{params.out_report_dir}",
-      
+                                    knit_root_dir=getwd(),
+                                    params=list(dhsPath="{input.dhs_coords}",
+                                                maePath="{input.mae_object}",
+                                                chIPMatPath="{input.add_chip_data}",
+                                                chrSizesPath="{params.chr_sizes}",
+                                                blRegionsPath="{params.bl_regions}",
+                                                chIPDir="{params.chip_dir}",
+                                                motifMatchesDHSDir="{params.motif_matches_dhs_dir}",
+                                                motifMatchesGenomeDir="{params.motif_matches_genome_dir}",
+                                                outDir="{params.out_dir}",
+                                                combsPath="{input.combinations}",
+                                                seed={params.seed},
+                                                threads={threads}))'
     """
-'''
 
-rule compute_metrics:
+rule comparison_performance_metrics:
   input:
-    prediction_list="Training_Prediction/all_prediction_list.txt"
+    dhs_coords=f"{ANNOTATION_DIR}/dhs.bed",
+    combinations="Training_Prediction/data/common/04_train_test_combinations.tsv",
+    labels_dhs="data/labels.dhs.rds",
+    labels_full_chr="data/labels.fullChr.rds",
+    mae_object=f"{ANNOTATION_DIR}/mae.rds",
+    add_chip_data=f"{ANNOTATION_DIR}/ChIP_mapped.h5",
+    full_chr_bin_ranges="data/fullChrBinRanges.bed",
+    full_chr_overlaps="data/fullChrBinOvs.rds",
   params:
+    rerun="TRUE",
     script_path=prefix_path("src/performance_pr.Rmd"),
-    out_plot_dir=prefix_path("plots"),
     out_report_dir=prefix_path("output"),
+    out_dir=prefix_path("data"),
     holdoutSet=HOLDOUT,
-    #maePath:
-    #combsPath=
+    blacklisted_regions=f"{ANNOTATION_DIR}/blacklist_extended.bed", 
+    methodsDir="Training_Prediction/predictions",
+    atacMergedDir="Training_Prediction/data/common/03_merged_cleaned_atac",
+    chipPeaksDir="Training_Prediction/data/common/02_merged_chip_peaks",
+    motifDhsDir="Training_Prediction/data/motifs/motif_matches_dhs",
+    motifGenomeDir="Training_Prediction/data/motifs/motif_matches_genome",
     seed=SEED
   threads: 4
   output:
     html="output/performance_pr.html"
+  log: "logs/performance_metrics.log"
   shell:
     """
+      exec 2>>{log} 
+      mkdir -p "Comparison/output/data"
       Rscript -e 'rmarkdown::render("{params.script_path}",
                                     "html_document",
                                     output_file="{output.html}",
                                     output_dir="{params.out_report_dir}",
+                                    knit_root_dir=getwd(), 
                                     params=list(holdoutSet="{params.holdoutSet}",
-                                                outPath="{params.out_plot_dir}",
-                                                #maePath=,
-                                                #combsPath=,
-                                                seed={params.seed}))'
+                                                outPath="{params.out_dir}",
+                                                methodsDir="{params.methodsDir}",
+                                                dhsCoordsPath="{input.dhs_coords}",
+                                                blPath="{params.blacklisted_regions}",
+                                                combsPath="{input.combinations}",
+                                                binCoordsPath="{input.full_chr_bin_ranges}",
+                                                fullChrBinOvsPath="{input.full_chr_overlaps}",
+                                                labelsDhsPath="{input.labels_dhs}",
+                                                labelsFullChrPath="{input.labels_full_chr}",
+                                                chIPMatPath="{input.add_chip_data}",
+                                                maePath="{input.mae_object}",
+                                                atacMergedDir="{params.atacMergedDir}",
+                                                chipPeaksDir="{params.chipPeaksDir}",
+                                                motifDhsDir="{params.motifDhsDir}",
+                                                motifGenomeDir="{params.motifGenomeDir}",
+                                                rerun=as.logical("{params.rerun}"),
+                                                seed="{params.seed}",
+                                                threads="{threads}"))'
+    """
+  
+rule comparison_computational_resources:
+  input:
+    prediction_list="Training_Prediction/all_prediction_list.txt",
+    combinations="Training_Prediction/data/common/04_train_test_combinations.tsv",
+  params:
+    script_path=prefix_path("src/performance_comp_res.Rmd"),
+    out_plot_dir=prefix_path("plots"),
+    out_report_dir=prefix_path("output"),
+    out_dir=prefix_path("data"),
+    holdoutSet=HOLDOUT,
+    benchmarksDir="Training_Prediction/benchmarks",
+  threads: 4
+  output:
+    html="output/performance_comp_res.html"
+  log: "logs/performance_comp_res.log"
+  shell:
+    """
+      exec 2>>{log} 
+      mkdir -p {params.out_plot_dir}
+      mkdir -p {params.out_dir}
+      Rscript -e 'rmarkdown::render("{params.script_path}",
+                                    "html_document",
+                                    knit_root_dir=getwd(),
+                                    output_file="{output.html}",
+                                    output_dir="{params.out_report_dir}",
+                                    params=list(holdoutSet="{params.holdoutSet}",
+                                                outDir= "{params.out_dir}",
+                                                outPlotDir="{params.out_plot_dir}",
+                                                benchmarksDir="{params.benchmarksDir}",
+                                                threads="{threads}"))'
     """
 
-
+rule plot_performance:
+  input:
+    comp_resources="output/performance_comp_res.html",
+    performance_metrics="output/performance_pr.html",
+  params:
+    script_path=prefix_path("src/performance_pr_plots.Rmd"),
+    out_report_dir=prefix_path("output"),
+    data_dir=prefix_path("data"),
+    out_plot_dir=prefix_path("plots"),
+    out_dir=prefix_path("data"),
+    holdoutSet=HOLDOUT,
+  threads: 4
+  output:
+    html="output/performance_pr_plots.html"
+  log: "logs/performance_pr_plots.log"
+  shell:
+    """
+      exec 2>>{log} 
+      mkdir -p {params.out_plot_dir}
+      mkdir -p {params.out_dir}
+      Rscript -e 'rmarkdown::render("{params.script_path}",
+                                    "html_document",
+                                    knit_root_dir=getwd(),
+                                    output_file="{output.html}",
+                                    output_dir="{params.out_report_dir}",
+                                    params=list(holdoutSet="{params.holdoutSet}",
+                                    outPath="{params.out_dir}",
+                                    outPlotDir="{params.out_plot_dir}",
+                                    metricsDir="{params.data_dir}"))'
+    """

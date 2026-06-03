@@ -35,8 +35,8 @@ setDTthreads(as.integer(params$threads))
 mae <- readRDS(params$maePath)
 outDir <- params$outDir
 mae <- panContextFeatures(mae, seed=seed, saveHdf5=TRUE, 
-                          outDir=file.path("..", outDir))
-saveRDS(mae, file.path("..", params$outPath))
+                          outDir=outDir)
+saveRDS(mae, params$outPath)
 ```
 
 ```{r, session info}

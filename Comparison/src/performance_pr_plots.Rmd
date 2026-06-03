@@ -1,7 +1,11 @@
 ---
 title: "Performance Comparison Plots: Precision-Recall"
 output: html_document
-date: "2025-09-18"
+params:
+       holdoutSet: ""
+       outPath: ""
+       outPlotDir: ""
+       metricsDir: ""
 ---
 
 ```{r setup, include=FALSE}
@@ -10,7 +14,12 @@ library(patchwork)
 library(viridis)
 library(data.table)
 library(scales)
-source("../utils/plot_theme.R")
+library(magick)
+source("Comparison/src/plot_theme.R")
+
+outPath <- params$outPath
+outPlotDir <- params$outPlotDir
+metricsDir <- params$metricsDir
 
 cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", 
                 "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
@@ -21,10 +30,33 @@ baselineScores <- c("ChIP.nearest", "ChIP.any",
                     "ATAC+motif")
 baselineColors <- rep("black", length(baselineScores))
 names(baselineColors) <- baselineScores
-modelTypeColors <- c("Baseline scores"="#525252",
-                     "Motif match-based method"="#C8C8C8",
-                     "Supervised & motif match-based method"="#EBEBEB",
-                     "Supervised method"="#FFFFFF")
+modelTypeColors <- c("Baseline scores"="#C8C8C8",
+                     "Motif match-based method"="#929292",
+                     "Supervised & motif match-based method"="#525252",
+                     "Supervised method"="black")
+
+modelSuppFillColors <- c("TFBlearner.full"="#0072B2",
+                         "TFBlearner.basic"="#0072B2",
+                         "maxATAC.100"="#CC79A7",
+                         "maxATAC.default"="#CC79A7",
+                         "TOP"="#F0E442",
+                         "BMO"="#009E73",
+                         "C-score.unique"="#525252",
+                         "C-score"="#525252")
+modelMainFillColors <- c("TFBlearner.full"="#0072B2",
+                         "TFBlearner.basic"="#0072B2",
+                         "maxATAC.100"="#FFFFFF",
+                         "maxATAC.default"="#FFFFFF",
+                         "TOP"="#FFFFFF",
+                         "BMO"="#FFFFFF",
+                         "FIMO"="#FFFFFF",
+                         "ATAC.nucleosomefree"="#FFFFFF",
+                         "ATAC+motif"="#FFFFFF",
+                         "ATAC.nucleosomefree"="#FFFFFF",
+                         "ATAC.totaloverlaps"="#FFFFFF",
+                         "ChIP.nearest"="#FFFFFF",
+                         "C-score"="#FFFFFF")
+
 modelBase <- c("ChIP.nearest", "ATAC.totaloverlaps", "ATAC.nucleosomefree", 
                "ATAC+motif", "BMO", "TOP", "FIMO", "TFBlearner.basic", 
                "TFBlearner.full", "maxATAC.100", "maxATAC.default", 
@@ -37,7 +69,7 @@ methods <- c("BMO", "maxATAC.100", "maxATAC.default",
 ## DHS
 
 ```{r, load performance data dhs}
-pr.dhs <- list.files("performance_pr", pattern="pr.*.dhs.rds", 
+pr.dhs <- list.files(metricsDir, pattern="pr.*.dhs.rds", 
                      full.names=TRUE)
 pr.dhs <- pr.dhs[!grepl("subset", pr.dhs)]
 pr.dhs <- lapply(pr.dhs, readRDS)
@@ -83,24 +115,17 @@ pr.dhs.base.aucpr[,model:=factor(model,
 pr.dhs.base.aucpr[,type:=fifelse(model %in% baselineScores, 
                                  "Baseline scores", "Methods")]
 pbp.pr <- ggplot(pr.dhs.base.aucpr, aes(y=model, x=scores))+
-          labs(x="AUPRC", tags="A", y="Method", fill="Model type", 
-               #subtitle="Aggregated sets: AUCPR"
-               )+
-          geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
-          scale_fill_manual(values=modelTypeColors)+
-          scale_color_manual(values=c(methodColors, 
-                                      baselineColors))+
-          guides(colour = "none")+
-          #scale_x_discrete(guide = guide_axis(n.dodge=3))+
+          labs(x="AUPRC", tags="A", y="Method", color="Model type")+
+          geom_boxplot(aes(color=model_type, fill=model), size=0.75)+
+          scale_fill_manual(values=modelMainFillColors)+
+          scale_color_manual(values=modelTypeColors)+
+          guides(fill = "none")+
           stat_summary(fun.x = mean, geom = "errorbar", 
                        aes(xmax = ..x.., xmin = ..x..),
                  width = .75, linetype = "dashed")+
           theme_sleek()+
           theme(axis.title.y=element_blank(), 
                 legend.position="bottom")
-          #theme(legend.position="right",
-          #      legend.margin=margin(-5,-5,-5,-5),
-          #      legend.box.margin=margin(-5,-5,-5,-5))
 pbp.pr
 
 pr.dhs.base.ppv0.05 <- subset(pr.dhs.base, metric=="PPV.0.05" & 
@@ -112,24 +137,18 @@ pr.dhs.base.ppv0.05[,model:=factor(model,
 pr.dhs.base.ppv0.05[,type:=fifelse(model %in% baselineScores, 
                                   "Baseline scores", "Methods")]
 pbp.prec0.05 <- ggplot(pr.dhs.base.ppv0.05, aes(y=model, x=scores))+
-                labs(x="Precision at 5% Recall", 
-                     tags="C", y="Method", fill="Model type",
-                     #subtitle="Aggregated sets: Precision at 5% Recall"
-                     )+
-                geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
-                scale_fill_manual(values=modelTypeColors)+
-                scale_color_manual(values=c(methodColors, 
-                                             baselineColors))+
-                guides(colour = "none")+
+                labs(x="Precision at 5% recall", 
+                     tags="C", y="Method", color="Model type")+
+                geom_boxplot(aes(color=model_type, fill=model), size=0.75)+
+                scale_fill_manual(values=modelMainFillColors)+
+                scale_color_manual(values=modelTypeColors)+
+                guides(fill = "none")+
                 stat_summary(fun.x = mean, geom = "errorbar", 
                              aes(xmax = ..x.., xmin = ..x..),
                              width = .75, linetype = "dashed")+
                 theme_sleek()+
-                 theme(axis.title.y=element_blank(), 
-                       legend.position="bottom")
-                #theme(legend.position="right",
-                #      legend.margin=margin(-5,-5,-5,-5),
-                #      legend.box.margin=margin(-5,-5,-5,-5))
+                theme(axis.title.y=element_blank(), 
+                      legend.position="bottom")
 pbp.prec0.05
 
 pr.dhs.base.ppv0.1 <- subset(pr.dhs.base, metric=="PPV.0.1" & 
@@ -141,26 +160,18 @@ pr.dhs.base.ppv0.1[,model:=factor(model,
 pr.dhs.base.ppv0.1[,type:=fifelse(model %in% baselineScores, 
                                   "Baseline scores", "Methods")]
 pbp.prec0.1 <- ggplot(pr.dhs.base.ppv0.1, aes(y=model, x=scores))+
-                labs(x="Precision at 10% Recall", tags="D", y="Method",
-                     #subtitle="Aggregated sets: Precision at 10% Recall",
-                     fill="Model type")+
-                geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
-                scale_fill_manual(values=modelTypeColors)+
-                scale_color_manual(values=c(methodColors, 
-                                             baselineColors))+
-                guides(colour = "none")+
-                #geom_text(x=median(pr.0.1.dhs.baseline$average_noncons_merged)-0.025,
-                #          label="ChIP-seq nearest cellular context", 
-                #          y="cScore", angle = 90)+
+                labs(x="Precision at 10% recall", tags="D", y="Method",
+                     color="Model type")+
+                geom_boxplot(aes(color=model_type, fill=model), size=0.75)+
+                scale_fill_manual(values=modelMainFillColors)+
+                scale_color_manual(values=modelTypeColors)+
+                guides(fill = "none")+
                 stat_summary(fun.x = mean, geom = "errorbar", 
                              aes(xmax = ..x.., xmin = ..x..),
                              width = .75, linetype = "dashed")+
                 theme_sleek()+
                  theme(axis.title.y=element_blank(),
                        legend.position="bottom")
-                #theme(legend.position="right",
-                #      legend.margin=margin(-5,-5,-5,-5),
-                #      legend.box.margin=margin(-5,-5,-5,-5))
 pbp.prec0.1
 
 
@@ -175,195 +186,39 @@ pr.dhs.base.fce[,type:=fifelse(model %in% baselineScores,
                                  "Baseline scores", "Methods")]
 pbp.fce <- ggplot(pr.dhs.base.fce, aes(y=model, x=FCE))+
                  labs(x="Enrichment over random", 
-                      tags="B", y="Method", color=NULL, 
-                      #subtitle="Aggregated sets: Enrichment over random",
-                      fill="Model type")+
-                 geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
-                 scale_color_manual(values=c(methodColors, 
-                                             baselineColors))+
-                 guides(colour = "none")+
-                 scale_fill_manual(values=modelTypeColors)+
+                      tags="B", y="Method", fill=NULL, 
+                      color="Model type")+
+                 geom_boxplot(aes(color=model_type, fill=model), size=0.75)+
+                 scale_fill_manual(values=modelMainFillColors)+
+                 scale_color_manual(values=modelTypeColors)+
+                 scale_x_log10()+
                  stat_summary(fun.x = mean, geom = "errorbar", 
                               aes(xmax = ..x.., xmin = ..x..),
                               width = .75, linetype = "dashed")+
-                 scale_x_log10()+
+                 guides(fill = "none")+
                  theme_sleek()+
                  theme(axis.title.y=element_blank(),
                        legend.position="bottom")
-                 #theme(legend.position="right",
-                #       legend.margin=margin(-5,-5,-5,-5),
-                #       legend.box.margin=margin(-5,-5,-5,-5))
 
-p.pred.step <- readRDS("p.pred.step.rds")
-p.train.step <- readRDS("p.train.step.opt1.rds")
+p.train.step <- readRDS(file.path(outPlotDir, "p.train.step.opt2.rds"))
+p.pred.step <- readRDS(file.path(outPlotDir, "p.pred.step.opt2.rds"))
 (pbp.pr + pbp.prec0.05 + p.train.step)  /  
 guide_area() /  
 (pbp.fce  + pbp.prec0.1 + p.pred.step)+plot_layout(widths=c(1,1,2), 
                                                    heights=c(1,0.05,1),
                                                    guides="collect", 
                                                    axes="collect")
-ggsave("main_perf_opt1.pdf", units="cm",
-       width=35, height=20, dpi=150)
-
-#(pbp.pr + pbp.prec0.05)  / 
-#(pbp.fce  + pbp.prec0.1) / 
-#free(p.train.step + p.pred.step)+plot_layout(heights=c(1,1,2), guides="collect")
-#ggsave("main_perf.png", units="cm", width=30, height=35)
-p.train.step <- readRDS("p.train.step.opt2.rds")
-p.pred.step <- readRDS("p.pred.step.opt2.rds")
-(pbp.pr + pbp.prec0.05 + p.train.step)  /  
-guide_area() /  
-(pbp.fce  + pbp.prec0.1 + p.pred.step)+plot_layout(widths=c(1,1,2), 
-                                                   heights=c(1,0.05,1),
-                                                   guides="collect", 
-                                                   axes="collect")
-ggsave("main_perf_opt2.pdf", units="cm", 
+ggsave(file.path(outPlotDir, "main_perf.pdf"), units="cm", 
        width=35, height=20, dpi=150)
 ``` 
-```{r, simp}
-subModels <- c("C-score", "ATAC+motif", "TOP", "BMO", 
-               "maxATAC.default", "maxATAC.100", "TFBlearner.basic",
-               "TFBlearner.full")
-pbp.pr.norm <- ggplot(subset(pr.dhs.base.aucpr, 
-                        model %in% subModels), aes(y=model, x=scores))+
-          labs(x="AUPRC", tags="A", y="Method", fill="Model type")+
-          geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
-          scale_fill_manual(values=modelTypeColors)+
-          scale_color_manual(values=c(methodColors, 
-                                      baselineColors))+
-          guides(colour = "none")+
-          stat_summary(fun.x = mean, geom = "errorbar", 
-                       aes(xmax = ..x.., xmin = ..x..),
-                 width = .75, linetype = "dashed")+
-          theme_sleek()+
-          theme(axis.title.y=element_blank(), 
-                legend.position="bottom")
-
-pr.dhs.base.ppv0.05 <- subset(pr.dhs.base, metric=="PPV.0.05" & 
-                                           peak_set=="average_noncons_merged")
-setorder(pr.dhs.base.ppv0.05, median_model)
-pr.dhs.base.ppv0.05[,model:=factor(model, 
-                                   levels=unique(pr.dhs.base.ppv0.05$model), 
-                                   ordered=TRUE)]
-pr.dhs.base.ppv0.05[,type:=fifelse(model %in% baselineScores, 
-                                  "Baseline scores", "Methods")]
-pbp.prec0.05.norm <- ggplot(subset(pr.dhs.base.ppv0.05, 
-                              model %in% subModels) , aes(y=model, x=scores))+
-                labs(x="Precision at 5% Recall", 
-                     tags="C", y="Method", fill="Model type")+
-                geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
-                scale_fill_manual(values=modelTypeColors)+
-                scale_color_manual(values=c(methodColors, 
-                                             baselineColors))+
-                guides(colour = "none")+
-                stat_summary(fun.x = mean, geom = "errorbar", 
-                             aes(xmax = ..x.., xmin = ..x..),
-                             width = .75, linetype = "dashed")+
-                theme_sleek()+
-                 theme(axis.title.y=element_blank(), 
-                       legend.position="bottom")
-(pbp.pr.norm+(pbp.prec0.05.norm+labs(tags="B"))+(p.pred.step+labs(tags="C"))) / guide_area()+
-plot_layout(widths=c(1,1,2), 
-            heights=c(1,0.05),
-            guides="collect", 
-            axes="collect")
-ggsave("main_perf_simp.pdf", units="cm", width=35, height=10, dpi=150)
-```
-
-```{r, simp 2}
-subModels <- c("C-score", "ATAC+motif", "TOP", "BMO", 
-               "maxATAC.default", "maxATAC.100", "TFBlearner.basic",
-               "TFBlearner.full")
-pr.dhs.base.aucpr[,model_type:=fifelse(model=="TFBlearner.full", 
-                                       "TFBlearner.full",model_type)]
-pr.dhs.base.aucpr[,model_type:=fifelse(model=="maxATAC.100", 
-                                       "maxATAC", model_type)]
-pbp.pr <- ggplot(subset(pr.dhs.base.aucpr, 
-                        model %in% subModels), aes(y=model, x=scores))+
-          labs(x="AUPRC", tags="A", y="Method", fill="Model type")+
-          geom_boxplot(aes(fill=model_type, color=model), size=0.75,
-                        alpha=0.75)+
-          scale_fill_manual(values=c(modelTypeColors, methodColors[c(1,4)]),
-                            labels=c("Baseline scores"="Baseline scores",
-                                           "Supervised & motif match-based method"="Supervised & motif match-based method",
-                                           "Supervised method"="Supervised method",
-                                           "Motif match-based method"="Motif match-based method"),
-                            breaks=c("Baseline scores"="Baseline scores",
-                                     "Motif match-based method"="Motif match-based method",
-                                     "Supervised & motif match-based method"="Supervised & motif match-based method",
-                                     "Supervised method"="Supervised method"))+
-          scale_color_manual(values=c(methodColors, baselineColors))+
-          guides(colour = "none")+
-          stat_summary(fun.x = mean, geom = "errorbar", 
-                       aes(xmax = ..x.., xmin = ..x..),
-                 width = .75, linetype = "dashed")+
-          theme_sleek()+
-          theme(axis.title.y=element_blank(), 
-                legend.position="bottom")
-
-pr.dhs.base.ppv0.05 <- subset(pr.dhs.base, metric=="PPV.0.05" & 
-                                           peak_set=="average_noncons_merged")
-setorder(pr.dhs.base.ppv0.05, median_model)
-pr.dhs.base.ppv0.05[,model:=factor(model, 
-                                   levels=unique(pr.dhs.base.ppv0.05$model), 
-                                   ordered=TRUE)]
-pr.dhs.base.ppv0.05[,type:=fifelse(model %in% baselineScores, 
-                                  "Baseline scores", "Methods")]
-pr.dhs.base.ppv0.05[,model_type:=fifelse(model=="TFBlearner.full", 
-                                         "TFBlearner.full",model_type)]
-pr.dhs.base.ppv0.05[,model_type:=fifelse(model=="maxATAC.100", 
-                                         "maxATAC", model_type)]
-pbp.prec0.05 <- ggplot(subset(pr.dhs.base.ppv0.05, 
-                              model %in% subModels) , aes(y=model, x=scores))+
-                labs(x="Precision at 5% Recall", 
-                     tags="C", y="Method", fill="Model type")+
-                geom_boxplot(aes(fill=model_type, color=model), size=0.75, 
-                             alpha=0.75)+
-                scale_fill_manual(values=c(modelTypeColors, methodColors[c(1,4)]),
-                                  breaks=c("Baseline scores"="Baseline scores",
-                                           "Motif match-based method"="Motif match-based method",
-                                           "Supervised & motif match-based method"="Supervised & motif match-based method",
-                                           "Supervised method"="Supervised method"),
-                                  labels=c("Baseline scores"="Baseline scores",
-                                           "Supervised & motif match-based method"="Supervised & motif match-based method",
-                                           "Supervised method"="Supervised method",
-                                           "Motif match-based method"="Motif match-based method"))+
-                scale_color_manual(values=c(methodColors, baselineColors))+
-                guides(colour = "none")+
-                stat_summary(fun.x = mean, geom = "errorbar", 
-                             aes(xmax = ..x.., xmin = ..x..),
-                             width = .75, linetype = "dashed")+
-                theme_sleek()+
-                 theme(axis.title.y=element_blank(), 
-                       legend.position="bottom")
-(pbp.pr+(pbp.prec0.05+labs(tags="B"))+(p.pred.step+labs(tags="C"))) / guide_area()+
-plot_layout(widths=c(1,1,2), 
-            heights=c(1,0.05),
-            guides="collect", 
-            axes="collect")
-ggsave("main_perf_simp2.pdf", units="cm", width=35, height=10, dpi=150)
-```
-
-```{r, simp 3}
-p.pred.step <- readRDS("p.pred.step.simp.rds")
-
-(pbp.pr.norm+(pbp.prec0.05.norm+labs(tags="B"))+(p.pred.step+labs(tags="C"))) / guide_area()+
-plot_layout(widths=c(1,1,2), 
-            heights=c(1,0.05),
-            guides="collect", 
-            axes="collect")
-ggsave("main_perf_simp3.pdf", units="cm", width=35, height=10, dpi=150)
-```
-
 
 ```{r, fold-change over enrichment}
 p.p.pos_frac.pr <- ggplot(subset(pr.dhs.base.fce, model %in% methods), 
                        aes(y=scores, x=frac_pos, color=model))+
                 facet_wrap(~model, scales="free", ncol=6)+
                 labs(y="AUPRC", x="Proportion of positives", tags="E")+
-                #scale_x_sqrt()+
                 scale_x_continuous(breaks=scales::pretty_breaks(3))+
-                scale_color_manual(values=methodColors)+
+                scale_color_manual(values=modelSuppFillColors)+
                 geom_smooth()+
                 geom_point()+
                 theme_sleek()+
@@ -498,7 +353,7 @@ pr.dhs.base.ag[,model:=factor(pr.dhs.base.ag$model,
                               ordered=TRUE)]
 ph.pr.0.05 <- ggplot(pr.dhs.base.ag, aes(y=model, x=`Peak Set`, fill=median_ppv0.05))+
   geom_tile()+
-  labs(fill="Median Precision\nat 5% Recall", y="", tags="C")+
+  labs(fill="Median Precision\nat 5% recall", y="", tags="C")+
   geom_text(aes(label=round(median_ppv0.05, 3), colour=color_flag), size=5)+
   scale_colour_manual(values = c("white", "black"), guide = "none") +
   facet_grid(cols=vars(set_type), scales="free", space = "free")+
@@ -529,7 +384,7 @@ pr.dhs.base.ag[,model:=factor(pr.dhs.base.ag$model,
                               ordered=TRUE)]
 ph.pr.0.1 <- ggplot(pr.dhs.base.ag, aes(y=model, x=`Peak Set`, fill=median_ppv0.1))+
   geom_tile()+
-  labs(fill="Median Precision\nat 10% Recall", y="", tags="D")+
+  labs(fill="Median Precision\nat 10% recall", y="", tags="D")+
   geom_text(aes(label=round(median_ppv0.1, 3), colour=color_flag), size=5)+
   scale_colour_manual(values = c("white", "black"), guide = "none") +
   facet_grid(cols=vars(set_type), scales="free", space = "free")+
@@ -539,7 +394,6 @@ ph.pr.0.1 <- ggplot(pr.dhs.base.ag, aes(y=model, x=`Peak Set`, fill=median_ppv0.
   theme(legend.position="right", 
         legend.margin=margin(-5,-5,-5,-5),
         legend.box.margin=margin(-5,-5,-5,-5), 
-        #legend.text.position="top", 
         strip.text=element_text(size=14), 
         axis.text.x=element_text(size=14),
         axis.title.x=element_text(size=14),
@@ -552,13 +406,13 @@ ph.pr.0.1 <- ggplot(pr.dhs.base.ag, aes(y=model, x=`Peak Set`, fill=median_ppv0.
 p2.ph <- ph.pr + ph.pr.0.05 + ph.fce + ph.pr.0.1 +plot_layout(ncol=2, nrow=2)
 p1 <- (p.p.pos_frac.pr / p.p.pos_frac.fce) + plot_layout(guides="collect")
 p2.ph / free(p1) + plot_layout(heights=c(2.5,2))
-ggsave("supplementary_peak_sets.pdf", 
+ggsave(file.path(outPlotDir, "supplementary_peak_sets.pdf"), 
        width=52, height=50, units="cm", dpi=150) # 45, 35
 ```
 
 
 ```{r}
-pr.dhs.subsets <- list.files("performance_pr", pattern="*subsets.*.rds", 
+pr.dhs.subsets <- list.files(metricsDir, pattern="*subsets.*.rds", 
                              full.names=TRUE)
 pr.dhs.subsets <- pr.dhs.subsets[!grepl(".extended", pr.dhs.subsets, fixed=TRUE) & 
                                   grepl("dhs", pr.dhs.subsets)]
@@ -580,18 +434,18 @@ pr.ag2.dhs[,color_flag:=fifelse(FCE>mean(pr.ag2.dhs$FCE), TRUE, FALSE)]
 library(dplyr)
 x2 <- recode(pr.ag2.dhs$set, 
              p2.4.n1.3="All", 
-             p2.n1.3="Only Test pos.", 
+             p2.n1.3="Only test pos.", 
              p4.n1.3="Both pos.",
-             p2.n1="Only Test pos. & both neg.",
+             p2.n1="Only test pos. & both neg.",
              p4.n1="Both pos. & both neg.",
              p2.4.n1="Test pos. & both neg.",
              p2.n3="Setdiff pos. & neg.",
              p4.n3="Pos in both vs all train pos",
              p2.4.n3="Pos in test vs all train pos")
 pr.ag2.dhs[,set:=factor(x2, levels=c("All", 
-                                            "Only Test pos.", 
+                                            "Only test pos.", 
                                             "Both pos.", 
-                                            "Only Test pos. & both neg.",
+                                            "Only test pos. & both neg.",
                                             "Both pos. & both neg.",
                                             "Test pos. & both neg.",
                                             "Setdiff pos. & neg.",
@@ -599,33 +453,33 @@ pr.ag2.dhs[,set:=factor(x2, levels=c("All",
                                             "Pos in test vs all train pos"), 
                                ordered=TRUE)]
 pr.ag2.dhs[,set_type_neg:=fifelse(set %in% c("All", 
-                                             "Only Test pos.", 
+                                             "Only test pos.", 
                                              "Both pos."), 
-                              "All Test", "Only Test")]
-pr.ag2.dhs[,set_type_neg:=fifelse(set %in% c("Only Test pos. & both neg.",
-                                                    "Both pos. & both neg.", 
-                                                    "Test pos. & both neg."), 
+                              "All test", "Only test")]
+pr.ag2.dhs[,set_type_neg:=fifelse(set %in% c("Only test pos. & both neg.",
+                                              "Both pos. & both neg.", 
+                                              "Test pos. & both neg."), 
                               "Only in both", set_type_neg)]
-pr.ag2.dhs[,set_pos:=fifelse(set %in% c("Only Test pos.", 
-                                               "Only Test pos. & both neg.", 
-                                               "Setdiff pos. & neg."), 
-                             "Only Test", "Only in both")]
+pr.ag2.dhs[,set_pos:=fifelse(set %in% c("Only test pos.", 
+                                        "Only test pos. & both neg.", 
+                                        "Setdiff pos. & neg."), 
+                             "Only test", "Only in both")]
 pr.ag2.dhs[,set_pos:=fifelse(set %in% c("All", 
-                                               "Test pos. & both neg.", 
-                                               "Pos in test vs all train pos"), 
-                             "All Test", set_pos)]
+                                        "Test pos. & both neg.",
+                                        "Pos in test vs all train pos"), 
+                             "All test", set_pos)]
 
 annotSet <- unique(pr.ag2.dhs[,c("set_type_neg", 
                                  "set_pos"), with=FALSE], 
                    by=c("set_type_neg", "set_pos"))
 
-annotSet[,`Positive set 1`:=fifelse(set_pos=="All Test" | set_pos=="Only Test", 
-                                    "Peak only in Test", NA)]
-annotSet[,`Positive set 2`:=fifelse(set_pos=="Only Test", 
+annotSet[,`Positive set 1`:=fifelse(set_pos=="All test" | set_pos=="Only test", 
+                                    "Peak only in test", NA)]
+annotSet[,`Positive set 2`:=fifelse(set_pos=="Only test", 
                                     NA, "Peak in train and test")]
-annotSet[,`Negative set 1`:=fifelse(set_type_neg=="All Test" | set_type_neg=="Only in both", 
+annotSet[,`Negative set 1`:=fifelse(set_type_neg=="All test" | set_type_neg=="Only in both", 
                                     "Peak in neither", NA)]
-annotSet[,`Negative set 2`:=fifelse(set_type_neg!="Only in both", "Peak only in Train", NA)]
+annotSet[,`Negative set 2`:=fifelse(set_type_neg!="Only in both", "Peak only in train", NA)]
 annotSet2 <- melt(annotSet, id.vars=c("set_type_neg", "set_pos"), 
                   variable.name="model", value.name="set")
 
@@ -637,7 +491,7 @@ annotSet2$model <- factor(annotSet2$model, levels = c("Positive set 1",
 pr.ag2.dhs[,set_pos:=factor(set_pos, 
                              levels=unique(pr.ag2.dhs$set_pos), 
                              ordered=TRUE)]
-lvl_pos <- c("All Test", "Only in both", "Only Test")
+lvl_pos <- c("All test", "Only in both", "Only test")
 pr.ag2.dhs[, set_pos := factor(set_pos, levels = lvl_pos, ordered=TRUE)]
 annotSet2[, set_pos := factor(set_pos, levels = lvl_pos, ordered=TRUE)]
  
@@ -648,20 +502,17 @@ lvl_neg <- levels(pr.ag2.dhs$set_type_neg)
 pr.ag2.dhs[, set_type_neg := factor(set_type_neg, levels = lvl_neg, ordered=TRUE)]
 annotSet2[, set_type_neg := factor(set_type_neg, levels = lvl_neg, ordered=TRUE)]
 
-
-#pr.ag2.dhs[,model:=factor(pr.ag2.dhs$model, levels=levels(annotSet2$model), ordered=TRUE)]
 pr.ag2.dhs$type <- "Models"
 annotSet2$type <- "Set"
 colorsSets <- cbbPalette[2:5]
-names(colorsSets) <- c("Peak in train and test", "Peak only in Train",
-                       "Peak only in Test", "Peak in neither")
+names(colorsSets) <- c("Peak in train and test", "Peak only in train",
+                       "Peak only in test", "Peak in neither")
 
 p.hp.sets <- ggplot(pr.ag2.dhs, aes(y=model, x=set_pos, fill=FCE))+
   geom_tile()+
-  #facet_grid(cols=vars(set_type_neg), rows=vars(type), scales="free")+
   ggh4x::facet_nested(type~ "Set of negatives" + set_type_neg, 
                       scales="free_y", space="free")+
-  labs(fill="Median Enrichment\n over Expectation", y="", tags="B", x="Peak sets used")+
+  labs(fill="Median enrichment\n over random", y="", tags="B", x="Peak sets used")+
   geom_text(aes(label=round(FCE, 3), colour=color_flag), size=4)+
   scale_colour_manual(values = c("white", "black"), guide = "none") +
   scale_fill_viridis(option="B",trans = "log",
@@ -675,9 +526,6 @@ p.hp.sets <- ggplot(pr.ag2.dhs, aes(y=model, x=set_pos, fill=FCE))+
                     guide="none")+
   scale_alpha_manual(values=c("1"=1, "2"=1,"3"=1,"4"=1),
                      guide = "none")+
-  #scale_y_discrete(limits = c(levels(annotSet2$model)),
-  #                 expand = c(0, 0)) +
-  #coord_fixed()+
   theme_sleek()+
   theme(panel.spacing = unit(2, "pt"),
         panel.spacing.y = grid::unit(2, "pt"),
@@ -689,19 +537,18 @@ p.hp.sets <- ggplot(pr.ag2.dhs, aes(y=model, x=set_pos, fill=FCE))+
         legend.title=element_text(size=12), 
         legend.text=element_text(size=12), 
         plot.tag=element_text(size=20))
-          #element_text(size = 14, family = "Helvetica"))
 p.hp.sets
 
 annotSub <- data.table(Set=c("Peak in neither", 
-                             "Peak only in Test", 
-                             "Peak only in Train", "Peak in\ntrain and test"), 
+                             "Peak only in test", 
+                             "Peak only in train", "Peak in\ntrain and test"), 
                        `Peak in train`=c(FALSE, FALSE, TRUE, TRUE), 
                        `Peak in test`=c(FALSE, TRUE, FALSE, TRUE))
-annotSub[,Set:=factor(Set, levels=c("Peak in\ntrain and test", "Peak only in Train",
-                                    "Peak only in Test", "Peak in neither"), 
+annotSub[,Set:=factor(Set, levels=c("Peak in\ntrain and test", "Peak only in train",
+                                    "Peak only in test", "Peak in neither"), 
                       ordered=TRUE)]
-names(colorsSets) <- c("Peak in\ntrain and test", "Peak only in Train",
-                       "Peak only in Test", "Peak in neither")
+names(colorsSets) <- c("Peak in\ntrain and test", "Peak only in train",
+                       "Peak only in test", "Peak in neither")
 p.scheme.sets <- ggplot(annotSub, aes(x=`Peak in test`, 
                                       y=`Peak in train`, fill=Set))+
             geom_tile()+
@@ -709,10 +556,7 @@ p.scheme.sets <- ggplot(annotSub, aes(x=`Peak in test`,
             labs(tag="A")+
             scale_fill_manual(values=colorsSets)+
             theme_sleek()+
-            theme(
-                  #axis.title.x = element_text(size = 16, family = "Helvetica"),
-                  #axis.title.y = element_text(size = 16, family = "Helvetica"),
-                  aspect.ratio = 1,
+            theme(aspect.ratio = 1,
                   axis.title.x=element_text(size=12),
                   axis.title.y=element_text(size=12),
                   axis.text.x=element_text(size=12),
@@ -725,7 +569,7 @@ p.scheme.sets + p.hp.sets + plot_layout(widths=c(1,2))
 ```
 
 ```{r}
-labels.dhs <- readRDS("labels.dhs.rds")
+labels.dhs <- readRDS(file.path(metricsDir, "labels.dhs.rds"))
 nUniquePeaks <- list()
 for(tfI in unique(labels.dhs$tf)){
   labels.dhs.sub <- subset(labels.dhs, tf==tfI)
@@ -754,11 +598,11 @@ pr.ov.stats[,model:=factor(pr.ov.stats$model,
 p.point.ft <- ggplot(pr.ov.stats, aes(x=frac_in_train, 
                                       y=value, 
                                       color=model))+
-              scale_color_manual(values=methodColors)+
+              scale_color_manual(values=modelSuppFillColors)+
               scale_y_log10()+
               facet_grid(cols=vars(model))+
-              labs(y="Median Enrichment over Expectation", 
-                   x="Fraction of Peaks in Train", tags="C")+
+              labs(y="Enrichment over random", 
+                   x="Fraction of peaks in train", tags="C")+
               geom_smooth(se=FALSE, color="black")+
               geom_hline(data=pr.ov.stats[,.(med=median(value)), by=model], 
                          aes(yintercept=med), color="black",
@@ -778,7 +622,7 @@ setorder(labels.ag, frac_in_train)
 labels.ag[,comb:=factor(labels.ag$comb, levels=unique(labels.ag$comb), ordered=TRUE)]
 p.bar.frac <- ggplot(labels.ag, aes(y=comb, x=frac_in_train))+
               geom_bar(stat="identity")+
-              labs(y="", x="Fraction of Peaks in Train", tags="D")+
+              labs(y="", x="Fraction of peaks in train", tags="D")+
               theme_sleek()+
               theme(axis.title.x=element_text(size=12),
                     axis.title.y=element_text(size=12),
@@ -792,8 +636,8 @@ p.bar.frac
 
 ```{r, supplementary figure sets}
 (p.scheme.sets + p.hp.sets + plot_layout(widths=c(1,2))) /  (p.point.ft+p.bar.frac+ plot_layout(widths=c(3,1)))
-ggsave("supplementary_exp_train_peaks.pdf", units="cm",
-       width=50, height=30, dpi=150)
+ggsave(file.path(outPlotDir, "supplementary_exp_train_peaks.pdf"), 
+       units="cm", width=50, height=30, dpi=150)
 ```
 
 ```{r, overall heatmap, DHS}
@@ -807,7 +651,6 @@ geom_tile()+
 geom_text(aes(label=round(scores,2), color=color_flag), size=8)+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
 scale_fill_viridis(option="B")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
@@ -819,8 +662,8 @@ theme(axis.text.x=element_text(size=18),
       legend.title=element_text(size=18), 
       legend.text=element_text(size=18))
 p.hp.full.auprc.dhs
-ggsave("supplementary_full_matrix_aucpr_dhs.pdf", units="cm", 
-       width=52, height=55, dpi=150)
+ggsave(file.path(outPlotDir, "supplementary_full_matrix_aucpr_dhs.pdf"), 
+       units="cm", width=52, height=55, dpi=150)
 
 p.hp.full.ppv0.05.dhs <- ggplot(subset(pr.dhs.base, metric=="PPV.0.05" & 
                                        model_type!="Baseline scores"), 
@@ -829,11 +672,10 @@ geom_tile()+
 geom_text(aes(label=round(scores,2), color=color_flag), size=8)+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
 scale_fill_viridis(option="C")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
-labs(y="", x="", fill="Precision at\n 5% Recall")+
+labs(y="", x="", fill="Precision at\n 5% recall")+
 theme_sleek()+
 theme(axis.text.x=element_text(size=18),
       axis.text.y=element_text(size=18),
@@ -841,7 +683,7 @@ theme(axis.text.x=element_text(size=18),
       legend.title=element_text(size=18), 
       legend.text=element_text(size=18))
 p.hp.full.ppv0.05.dhs
-ggsave("supplementary_full_matrix_ppv0.05_dhs.pdf", 
+ggsave(file.path(outPlotDir, "supplementary_full_matrix_ppv0.05_dhs.pdf"), 
        units="cm", width=52, height=55, dpi=150)
 
 
@@ -852,11 +694,10 @@ geom_tile()+
 geom_text(aes(label=round(scores,2), color=color_flag), size=8)+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
 scale_fill_viridis(option="A")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
-labs(y="", x="", fill="Precision at\n 10% Recall")+
+labs(y="", x="", fill="Precision at\n 10% recall")+
 theme_sleek()+
 theme(axis.text.x=element_text(size=18),
       axis.text.y=element_text(size=18),
@@ -864,8 +705,8 @@ theme(axis.text.x=element_text(size=18),
       legend.title=element_text(size=18), 
       legend.text=element_text(size=18))
 p.hp.full.ppv0.1.dhs
-ggsave("supplementary_full_matrix_ppv0.1_dhs.pdf", units="cm", 
-       width=52, height=55, dpi=150)
+ggsave(file.path(outPlotDir, "supplementary_full_matrix_ppv0.1_dhs.pdf"), 
+       units="cm", width=52, height=55, dpi=150)
 
 p.hp.full.fce.dhs <- ggplot(subset(pr.dhs.base, metric=="AUPRC" & 
                                                 model_type!="Baseline scores"), 
@@ -874,7 +715,6 @@ geom_tile()+
 geom_text(aes(label=round(FCE), color=color_flag), size=8)+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
 scale_fill_viridis(option="D", trans="log10")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
@@ -886,8 +726,8 @@ theme(axis.text.x=element_text(size=18),
       legend.title=element_text(size=18), 
       legend.text=element_text(size=18))
 p.hp.full.fce.dhs
-ggsave("supplementary_full_matrix_fce_dhs.pdf", units="cm", 
-       width=52, height=55, dpi=150)
+ggsave(file.path(outPlotDir, "supplementary_full_matrix_fce_dhs.pdf"), 
+       units="cm", width=52, height=55, dpi=150)
 
 
 p.hp.full.auprc.dhs <- ggplot(subset(pr.dhs.base, metric=="AUPRC" & 
@@ -897,7 +737,6 @@ geom_tile()+
 geom_text(aes(label=round(scores,2), color=color_flag))+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, nrow=1)+
 scale_fill_viridis(option="B")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
@@ -911,11 +750,10 @@ geom_tile()+
 geom_text(aes(label=round(scores,2), color=color_flag))+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, nrow=1)+
 scale_fill_viridis(option="C")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
-labs(y="", x="", fill="Precision at\n 5% Recall", tags="B")+
+labs(y="", x="", fill="Precision at\n 5% recall", tags="B")+
 theme_sleek()
 
 p.hp.full.ppv0.1.dhs <- ggplot(subset(pr.dhs.base, metric=="PPV.0.1" & 
@@ -925,11 +763,10 @@ geom_tile()+
 geom_text(aes(label=round(scores,2), color=color_flag))+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, nrow=1)+
 scale_fill_viridis(option="A")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
-labs(y="", x="", fill="Precision at\n 10% Recall", tags="C")+
+labs(y="", x="", fill="Precision at\n 10% recall", tags="C")+
 theme_sleek()
 p.hp.full.ppv0.1.dhs
 
@@ -940,7 +777,6 @@ geom_tile()+
 geom_text(aes(label=round(FCE), color=color_flag))+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, nrow=1)+
 scale_fill_viridis(option="D", trans="log10")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
@@ -951,19 +787,30 @@ p.hp.full.auprc.dhs/
 p.hp.full.ppv0.05.dhs /
 p.hp.full.ppv0.1.dhs / 
 p.hp.full.fce.dhs
-ggsave("supplementary_full_matrix_combined_dhs.pdf", 
+ggsave(file.path(outPlotDir, "supplementary_full_matrix_combined_dhs.pdf"), 
        units="cm", width=50, height=70, dpi=150)
 ```
 
 # Full genome
 
 ```{r, load performance data full genome}
-pr.full <- list.files("performance_pr", pattern="pr.*.full.rds", 
+pr.full <- list.files(metricsDir, pattern="pr.*.full.rds", 
                      full.names=TRUE)
 pr.full <- pr.full[!grepl("subset", pr.full)]
 pr.full <- lapply(pr.full, readRDS)
 pr.full <- rbindlist(pr.full, fill=TRUE, use.names=TRUE)
 pr.full[,FCE:=scores/frac_pos]
+pr.full$aggregation_type <- "bins"
+
+pr.full2 <- list.files(metricsDir, pattern="pr.*.full.agg.rds", 
+                       full.names=TRUE)
+pr.full2 <- pr.full2[!grepl("subset", pr.full2)]
+pr.full2 <- lapply(pr.full2, readRDS)
+pr.full2 <- rbindlist(pr.full2, fill=TRUE, use.names=TRUE)
+pr.full2[,FCE:=scores/frac_pos]
+pr.full2$aggregation_type <- "PRE+bins"
+
+pr.full <- rbind(pr.full, pr.full2, fill=TRUE, use.names=TRUE)
 ```
 
 To rank methods, the metrics using all and high-confidence peaks will be averaged, and the median and mean of this average metric across datasets will be reported.
@@ -973,17 +820,35 @@ pr.full.av <- pr.full.av[,.(scores=mean(scores),
                             frac_pos=mean(frac_pos),
                             FCE=mean(FCE),
                           n=.N), 
-                       by=.(model, metric, comb, tf, context)]
+                       by=.(model, metric, comb, tf, context, aggregation_type)]
 pr.full.av$peak_set <- "average_noncons_merged"
 pr.full <- rbind(pr.full, pr.full.av, fill=TRUE, use.names=TRUE)
 pr.full[,median_model:=median(scores), 
-       by=.(model, metric, peak_set)]
+       by=.(model, metric, peak_set, aggregation_type)]
 pr.full[,median_auprc_comb:=median(scores), 
-       by=.(comb, metric, peak_set)]
+       by=.(comb, metric, peak_set, aggregation_type)]
 ```
 
+```{r, rank plot full chromosomes}
+modelMainFillColors <- c("TFBlearner.full on bins"="#0072B2",
+                         "TFBlearner.basic on bins"="#0072B2",
+                         "TFBlearner.full on PRE+bins"="#0072B2",
+                         "TFBlearner.basic on PRE+bins"="#0072B2",
+                         "maxATAC.100 on bins"="#CC79A7",
+                         "maxATAC.default on bins"="#CC79A7",
+                         "maxATAC.100 on PRE+bins"="#CC79A7",
+                         "maxATAC.default on PRE+bins"="#CC79A7",
+                         "TOP"="#FFFFFF",
+                         "BMO"="#FFFFFF",
+                         "FIMO"="#FFFFFF",
+                         "ATAC.nucleosomefree"="#FFFFFF",
+                         "ATAC+motif"="#FFFFFF",
+                         "ATAC.nucleosomefree"="#FFFFFF",
+                         "ATAC.totaloverlaps"="#FFFFFF",
+                         "ChIP.nearest"="#FFFFFF",
+                         "C-score"="#FFFFFF")
 
-```{r, rank plot full genome}
+
 pr.full.base <- subset(pr.full, !grepl(".extended", model, fixed=TRUE) & 
                               model %in% modelBase)
 pr.full.base[,model_type:=fifelse(model %in% c("TFBlearner.full", 
@@ -998,50 +863,53 @@ pr.full.base[,model_type:=fifelse(model=="TOP", "Supervised & motif match-based 
 pr.full.base.aucpr <- subset(pr.full.base, metric=="AUPRC" & 
                              peak_set=="average_noncons_merged")
 setorder(pr.full.base.aucpr, median_model)
+
+pr.full.base.aucpr[,model:=fifelse(grepl("TFBlearner", model), 
+                                   paste(model, aggregation_type, sep=" on "), 
+                                   model)]
+pr.full.base.aucpr[,model:=fifelse(grepl("maxATAC", model), 
+                                   paste(model, aggregation_type, sep=" on "), 
+                                   model)]
 pr.full.base.aucpr[,model:=factor(model, 
                               levels=unique(pr.full.base.aucpr$model), 
                               ordered=TRUE)]
 pr.full.base.aucpr[,type:=fifelse(model %in% baselineScores, 
                                  "Baseline scores", "Methods")]
 pbp.pr <- ggplot(pr.full.base.aucpr, aes(y=model, x=scores))+
-          labs(x="AUPRC", tags="A", y="Method", fill="Model type", 
-               #subtitle="Aggregated sets: AUCPR"
-               )+
-          geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
-          scale_fill_manual(values=modelTypeColors)+
-          scale_color_manual(values=c(methodColors, 
-                                      baselineColors))+
-          guides(colour = "none")+
-          #scale_x_discrete(guide = guide_axis(n.dodge=3))+
+          labs(x="AUPRC", tags="B", y="Method", color="Model type")+
+          geom_boxplot(aes(color=model_type, fill=model), size=0.75)+
+          scale_fill_manual(values=modelMainFillColors)+
+          scale_color_manual(values=modelTypeColors)+
+          guides(fill = "none")+
           stat_summary(fun.x = mean, geom = "errorbar", 
                        aes(xmax = ..x.., xmin = ..x..),
                  width = .75, linetype = "dashed")+
           theme_sleek()+
           theme(axis.title.y=element_blank(), 
                 legend.position="bottom")
-          #theme(legend.position="right",
-          #      legend.margin=margin(-5,-5,-5,-5),
-          #      legend.box.margin=margin(-5,-5,-5,-5))
 pbp.pr
 
 pr.full.base.ppv0.05 <- subset(pr.full.base, metric=="PPV.0.05" & 
                                            peak_set=="average_noncons_merged")
 setorder(pr.full.base.ppv0.05, median_model)
+pr.full.base.ppv0.05[,model:=fifelse(grepl("TFBlearner", model), 
+                                     paste(model, aggregation_type, sep=" on "),
+                                     model)]
+pr.full.base.ppv0.05[,model:=fifelse(grepl("maxATAC", model), 
+                                   paste(model, aggregation_type, sep=" on "), 
+                                   model)]
 pr.full.base.ppv0.05[,model:=factor(model, 
                                    levels=unique(pr.full.base.ppv0.05$model), 
                                    ordered=TRUE)]
 pr.full.base.ppv0.05[,type:=fifelse(model %in% baselineScores, 
                                   "Baseline scores", "Methods")]
 pbp.prec0.05 <- ggplot(pr.full.base.ppv0.05, aes(y=model, x=scores))+
-                labs(x="Precision at 5% Recall", 
-                     tags="C", y="Method", fill="Model type",
-                     #subtitle="Aggregated sets: Precision at 5% Recall"
-                     )+
-                geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
-                scale_fill_manual(values=modelTypeColors)+
-                scale_color_manual(values=c(methodColors, 
-                                             baselineColors))+
-                guides(colour = "none")+
+                labs(x="Precision at 5% recall", 
+                     tags="C", y="Method", color="Model type")+
+                geom_boxplot(aes(color=model_type, fill=model), size=0.75)+
+                scale_fill_manual(values=modelMainFillColors)+
+                scale_color_manual(values=modelTypeColors)+
+                guides(fill = "none")+
                 stat_summary(fun.x = mean, geom = "errorbar", 
                              aes(xmax = ..x.., xmin = ..x..),
                              width = .75, linetype = "dashed")+
@@ -1053,23 +921,24 @@ pbp.prec0.05
 pr.full.base.ppv0.1 <- subset(pr.full.base, metric=="PPV.0.1" & 
                                           peak_set=="average_noncons_merged")
 setorder(pr.full.base.ppv0.1, median_model)
+pr.full.base.ppv0.1[,model:=fifelse(grepl("TFBlearner", model), 
+                                    paste(model, aggregation_type, sep=" on "), 
+                                    model)]
+pr.full.base.ppv0.1[,model:=fifelse(grepl("maxATAC", model), 
+                                   paste(model, aggregation_type, sep=" on "), 
+                                   model)]
 pr.full.base.ppv0.1[,model:=factor(model, 
                                    levels=unique(pr.full.base.ppv0.1$model), 
                                    ordered=TRUE)]
 pr.full.base.ppv0.1[,type:=fifelse(model %in% baselineScores, 
                                   "Baseline scores", "Methods")]
 pbp.prec0.1 <- ggplot(pr.full.base.ppv0.1, aes(y=model, x=scores))+
-                labs(x="Precision at 10% Recall", tags="D", y="Method",
-                     #subtitle="Aggregated sets: Precision at 10% Recall",
-                     fill="Model type")+
-                geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
-                scale_fill_manual(values=modelTypeColors)+
-                scale_color_manual(values=c(methodColors, 
-                                             baselineColors))+
-                guides(colour = "none")+
-                #geom_text(x=median(pr.0.1.dhs.baseline$average_noncons_merged)-0.025,
-                #          label="ChIP-seq nearest cellular context", 
-                #          y="cScore", angle = 90)+
+                labs(x="Precision at 10% recall", tags="D", y="Method",
+                     color="Model type")+
+                geom_boxplot(aes(color=model_type, fill=model), size=0.75)+
+                scale_fill_manual(values=modelMainFillColors)+
+                scale_color_manual(values=modelTypeColors)+
+                guides(fill = "none")+
                 stat_summary(fun.x = mean, geom = "errorbar", 
                              aes(xmax = ..x.., xmin = ..x..),
                              width = .75, linetype = "dashed")+
@@ -1083,6 +952,12 @@ pr.full.base.fce <- subset(pr.full.base, metric=="AUPRC" &
                             peak_set=="average_noncons_merged")
 pr.full.base.fce[,median_fce_model:=median(FCE), by=model]
 setorder(pr.full.base.fce, median_fce_model)
+pr.full.base.fce[,model:=fifelse(grepl("TFBlearner", model), 
+                                 paste(model, aggregation_type, sep=" on "), 
+                                 model)]
+pr.full.base.fce[,model:=fifelse(grepl("maxATAC", model), 
+                                 paste(model, aggregation_type, sep=" on "), 
+                                 model)]
 pr.full.base.fce[,model:=factor(model, 
                                levels=unique(pr.full.base.fce$model), 
                                ordered=TRUE)]
@@ -1090,29 +965,40 @@ pr.full.base.fce[,type:=fifelse(model %in% baselineScores,
                                  "Baseline scores", "Methods")]
 pbp.fce <- ggplot(pr.full.base.fce, aes(y=model, x=FCE))+
                  labs(x="Enrichment over random", 
-                      tags="B", y="Method", color=NULL, 
-                      #subtitle="Aggregated sets: Enrichment over random",
-                      fill="Model type")+
-                 geom_boxplot(aes(fill=model_type, color=model), size=0.75)+
-                 scale_color_manual(values=c(methodColors, 
-                                             baselineColors))+
-                 guides(colour = "none")+
-                 scale_fill_manual(values=modelTypeColors)+
+                      tags="E", y="Method",
+                      color="Model type")+
+                 geom_boxplot(aes(color=model_type, fill=model), size=0.75)+
+                 scale_color_manual(values=modelTypeColors)+
+                 scale_fill_manual(values=modelMainFillColors)+
+                 guides(fill = "none")+
+                 scale_x_log10()+
                  stat_summary(fun.x = mean, geom = "errorbar", 
                               aes(xmax = ..x.., xmin = ..x..),
                               width = .75, linetype = "dashed")+
-                 scale_x_log10()+
                  theme_sleek()+
                  theme(axis.title.y=element_blank(),
                        legend.position="bottom")
-(pbp.pr + pbp.prec0.05)  /  
-guide_area() /  
-(pbp.fce  + pbp.prec0.1)+plot_layout(widths=c(1,1,2), 
-                                                   heights=c(1,0.05,1),
-                                                   guides="collect", 
-                                                   axes="collect")
-ggsave("main_perf_full_genome.pdf", units="cm", 
-       width=35, height=20, dpi=150)
+
+# import scheme
+scheme <- magick::image_read_pdf(file.path(outPlotDir, 
+                                           "chromosomeWideEvaluation_scheme.pdf"))
+scheme <- magick::image_ggplot(scheme) + 
+    labs(tag="A") +
+    theme_sleek()+
+    theme(plot.tag=element_text(face="bold", size=16), 
+          axis.title.y=element_blank(), 
+          axis.text.y=element_blank())
+
+free(scheme) / 
+(pbp.pr + pbp.prec0.05) /
+guide_area() /
+(pbp.prec0.1 +pbp.fce)+plot_layout(widths=c(1,1,2), 
+                                               heights=c(1.5,1,0.05,1),
+                                               guides="collect", 
+                                               axes="collect")
+
+ggsave(file.path(outPlotDir, "main_perf_full_chromosomes.pdf"), units="cm", 
+       width=30, height=25, dpi=150)
 ``` 
 
 ```{r, overall heatmap full genome}
@@ -1135,6 +1021,7 @@ pr.full.base[,`Peak Set`:=factor(pr.full.base$`Peak Set`,
                                         "Unambigious", "Non-crowded", 
                                         "No motif", "Not in train"), 
                                ordered=TRUE)]
+pr.full.base <- subset(pr.full.base, aggregation_type=="bins")
 
 setorder(pr.full.base, median_auprc_comb)
 pr.full.base[,comb:=factor(comb, levels=unique(pr.full.base$comb), 
@@ -1150,7 +1037,6 @@ geom_tile()+
 geom_text(aes(label=round(scores,2), color=color_flag), size=8)+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
 scale_fill_viridis(option="B")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
@@ -1162,7 +1048,7 @@ theme(axis.text.x=element_text(size=18),
       legend.title=element_text(size=18), 
       legend.text=element_text(size=18))
 p.hp.full.auprc.full
-ggsave("supplementary_full_matrix_aucpr_full.pdf", 
+ggsave(file.path(outPlotDir, "supplementary_full_matrix_aucpr_full.pdf"), 
        units="cm", width=52, height=55, dpi=150)
 
 p.hp.full.ppv0.05.full <- ggplot(subset(pr.full.base, metric=="PPV.0.05" & 
@@ -1172,11 +1058,10 @@ geom_tile()+
 geom_text(aes(label=round(scores,2), color=color_flag), size=8)+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
 scale_fill_viridis(option="C")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
-labs(y="", x="", fill="Precision at\n 5% Recall")+
+labs(y="", x="", fill="Precision at\n 5% recall")+
 theme_sleek()+
 theme(axis.text.x=element_text(size=18),
       axis.text.y=element_text(size=18),
@@ -1184,9 +1069,8 @@ theme(axis.text.x=element_text(size=18),
       legend.title=element_text(size=18), 
       legend.text=element_text(size=18))
 p.hp.full.ppv0.05.full
-ggsave("supplementary_full_matrix_ppv0.05_full.pdf", units="cm", 
+ggsave(file.path(outPlotDir, "supplementary_full_matrix_ppv0.05_full.pdf"), units="cm", 
        width=52, height=55, dpi=150)
-
 
 p.hp.full.ppv0.1.full <- ggplot(subset(pr.full.base, metric=="PPV.0.1" & 
                                          model_type!="Baseline scores"), 
@@ -1195,11 +1079,10 @@ geom_tile()+
 geom_text(aes(label=round(scores,2), color=color_flag), size=8)+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
 scale_fill_viridis(option="A")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
-labs(y="", x="", fill="Precision at\n 10% Recall")+
+labs(y="", x="", fill="Precision at\n 10% recall")+
 theme_sleek()+
 theme(axis.text.x=element_text(size=18),
       axis.text.y=element_text(size=18),
@@ -1207,8 +1090,8 @@ theme(axis.text.x=element_text(size=18),
       legend.title=element_text(size=18), 
       legend.text=element_text(size=18))
 p.hp.full.ppv0.1.full
-ggsave("supplementary_full_matrix_ppv0.1_full.pdf", units="cm", 
-       width=52, height=55, dpi=150)
+ggsave(file.path(outPlotDir, "supplementary_full_matrix_ppv0.1_full.pdf"), 
+       units="cm", width=52, height=55, dpi=150)
 
 p.hp.full.fce.full <- ggplot(subset(pr.full.base, metric=="AUPRC" & 
                                     model_type!="Baseline scores"), 
@@ -1217,7 +1100,6 @@ geom_tile()+
 geom_text(aes(label=round(FCE), color=color_flag), size=8)+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, ncol=3, nrow=2)+
 scale_fill_viridis(option="D", trans="log10")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
@@ -1229,8 +1111,8 @@ theme(axis.text.x=element_text(size=18),
       legend.title=element_text(size=18), 
       legend.text=element_text(size=18))
 p.hp.full.fce.full
-ggsave("supplementary_full_matrix_fce_full.pdf", units="cm", 
-       width=52, height=55, dpi=150)
+ggsave(file.path(outPlotDir, "supplementary_full_matrix_fce_full.pdf"), 
+       units="cm",width=52, height=55, dpi=150)
 
 p.hp.full.auprc.full <- ggplot(subset(pr.full.base, metric=="AUPRC" & 
                                      model_type!="Baseline scores"), 
@@ -1239,7 +1121,6 @@ geom_tile()+
 geom_text(aes(label=round(scores,2), color=color_flag))+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, nrow=1)+
 scale_fill_viridis(option="B")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
@@ -1253,11 +1134,10 @@ geom_tile()+
 geom_text(aes(label=round(scores,2), color=color_flag))+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, nrow=1)+
 scale_fill_viridis(option="C")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
-labs(y="", x="", fill="Precision at\n 5% Recall", tags="B")+
+labs(y="", x="", fill="Precision at\n 5% recall", tags="B")+
 theme_sleek()
 
 p.hp.full.ppv0.1.full <- ggplot(subset(pr.full.base, metric=="PPV.0.1" & 
@@ -1267,13 +1147,11 @@ geom_tile()+
 geom_text(aes(label=round(scores,2), color=color_flag))+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, nrow=1)+
 scale_fill_viridis(option="A")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
-labs(y="", x="", fill="Precision at\n 10% Recall", tags="C")+
+labs(y="", x="", fill="Precision at\n 10% recall", tags="C")+
 theme_sleek()
-p.hp.full.ppv0.1.dhs
 
 p.hp.full.fce.full <- ggplot(subset(pr.full.base, metric=="AUPRC" & 
                                    model_type!="Baseline scores"), 
@@ -1282,7 +1160,6 @@ geom_tile()+
 geom_text(aes(label=round(FCE), color=color_flag))+
           scale_colour_manual(values = c("white", "black"), 
                               guide = "none") +
-#facet_grid(cols=vars(`Peak Set`))+
 facet_wrap(~`Peak Set`, nrow=1)+
 scale_fill_viridis(option="D", trans="log10")+
 scale_x_discrete(guide = guide_axis(n.dodge=3))+
@@ -1293,14 +1170,9 @@ p.hp.full.auprc.full /
 p.hp.full.ppv0.05.full /
 p.hp.full.ppv0.1.full / 
 p.hp.full.fce.full
-ggsave("supplementary_full_matrix_combined_full.pdf", 
+ggsave(file.path(outPlotDir, "supplementary_full_matrix_combined_full.pdf"), 
        units="cm", width=50, height=70, dpi=150)
 ```
-
-
-# Extended methods comparison
-
-TODO
 
 ```{r}
 sessionInfo()

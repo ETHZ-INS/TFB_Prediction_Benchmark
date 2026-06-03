@@ -25,14 +25,14 @@ setDTthreads(as.integer(params$threads))
 ```
 
 ```{r, input data}
-dhsCoords <- fread(file.path("../..", params$dhsPath), 
+dhsCoords <- fread(params$dhsPath, 
                    col.names=c("chr", "start", "end", "width", "strand"))
 dhsCoords <- makeGRangesFromDataFrame(as.data.frame(dhsCoords))
 
 
-motifModels <- readRDS(file.path("../..", params$motifModelsPath))
-outDir <- file.path("../..", params$outDir)
-fa <- FaFile(file.path("../..", params$genomeFaPath))
+motifModels <- readRDS(params$motifModelsPath)
+outDir <- params$outDir
+fa <- FaFile(params$genomeFaPath)
 ```
 
 # Motifs preprocessing

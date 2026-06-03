@@ -1,7 +1,6 @@
 ---
 title: "Compute labels"
 output: html_document
-date: "2025-09-18"
 params: 
   outDir: "output"
   dhsPath: "dhsCoords.bed"
@@ -22,7 +21,7 @@ library(TFBlearner)
 library(GenomicRanges)
 library(rtracklayer)
 library(ggplot2)
-source("utils.R")
+source("Comparison/src/utils.R")
 
 valChrs <- c("chr2", "chr4", "chr9")
 setDTthreads(params$threads)

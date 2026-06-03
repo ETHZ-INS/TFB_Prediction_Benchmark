@@ -19,8 +19,9 @@ library(BSgenome)
 library(BiocParallel)
 library(memes)
 
-condaEnvPath <- file.path(Sys.getenv("CONDA_PREFIX"), "lib", "R", "library")
-.libPaths(condaEnvPath)
+getwd()
+params$refPath
+file.exists(params$refPath)
 ```
                 
 ```{r, prepare data}
@@ -29,14 +30,14 @@ tfsSub <- params$tfs
 tfsSub <- unlist(tstrsplit(tfsSub, split=" "))
 print(tfsSub)
 
-refPath <- file.path("../..", params$refPath)
+refPath <- file.path(params$refPath)
 if(params$dhsPath!=""){
-  dhsPath <- file.path("../..", params$dhsPath)
+  dhsPath <- file.path(params$dhsPath)
   searchFull <- FALSE
 }else{
   searchFull <- TRUE
 }
-motifs = readRDS(file.path("../..", params$motif_models))
+motifs = readRDS(file.path(params$motif_models))
 
 if(length(intersect(tfsSub, names(motifs)))>0){
   motifs <- motifs[tfsSub]
@@ -46,7 +47,7 @@ if(length(intersect(tfsSub, names(motifs)))>0){
 ```{r, define search space, error=TRUE}
 if(!searchFull){
   #if(!file.exists('../data/annotation/dhs.fa')){
-  dhs <- fread(dhsPath, col.names=c("chr", "start", "end", "width", "strand"))
+  dhs <- fread(dhsPath, col.names=c("chr", "start", "end")) # "width", "strand"
   dhs <- makeGRangesFromDataFrame(as.data.frame(dhs))
   seqlevelsStyle(dhs) <- "NCBI"
   stringSet <- readDNAStringSet(refPath)
@@ -66,7 +67,7 @@ if(!searchFull){
 
 ```{r, run FIMO search, error=TRUE} 
 motifDt <- data.table(motif=names(motifs))
-combs <- fread(file.path("../..", params$combs_dir))
+combs <- fread(file.path(params$combs_dir))
 allTfs <- unique(combs$TF)
 motifDt <- subset(motifDt, motif %in% allTfs)
 
@@ -82,7 +83,7 @@ if(length(allTfs)>=16){
 motifGroups <- split(motifDt, by="group")
 bplapply(motifGroups, function(mg){
 
-  outDir <- file.path("../..", params$outDir, unique(mg$group))
+  outDir <- file.path(params$outDir, unique(mg$group))
   if(!dir.exists(outDir)) dir.create(outDir, recursive=TRUE)
   
   motifsSub <- motifs[names(motifs) %in% mg$motif]
@@ -97,7 +98,7 @@ bplapply(motifGroups, function(mg){
 
    mm <- fread(file.path(outDir, "fimo.tsv"))
    mm <- split(mm, by="motif_id")
-   outDirBed <-  file.path("../..", params$outDir)
+   outDirBed <-  file.path(params$outDir)
    lapply(names(mm), function(mot){
      m <- mm[[mot]]
      m[,sequence_name:=paste0("chr", sequence_name)]
@@ -120,13 +121,13 @@ bplapply(motifGroups, function(mg){
 ```{r, merge all fimo outputs files, error=TRUE, eval=FALSE}
 fimoAll <- data.table()
 for(mg in motifGroups){
-  outDir <- file.path("../..", params$outDir, unique(mg$group))
+  outDir <- file.path(params$outDir, unique(mg$group))
   mm <- fread(file.path(outDir, "fimo.tsv"))
   fimoAll <- rbind(fimoAll, mm, use.names=TRUE, fill=TRUE)
   file.remove(file.path(outDir, "fimo.tsv"))
   unlink(outDir, recursive = TRUE)
 }
-write.table(fimoAll, file=file.path("../..", params$outDir, "fimo.tsv"), 
+write.table(fimoAll, file=file.path(params$outDir, "fimo.tsv"), 
                                     sep="\t", row.names=FALSE, quote=FALSE)
 ```
 

@@ -1,29 +1,26 @@
 ---
 title: "Performance Comparison: Precision-Recall"
 output: html_document
-date: "2025-09-18"
 params: 
-  holdoutSet: "H1"
-  outPath: "performance_pr"
-  methodsDir: "Training_Prediction/predictions"
-  dhsCoordsPath: "dhs.bed"
-  combsPath: "combinations.tsv"
-  binCoordsPath: "fullChrBinRanges.bed"
-  fullChrBinOvsPath: "fullChrBinOvs.rds"
-  labelsDhsPath: "labels.dhs.rds"
-  labelsFullChrPath: "labels.fullChr.rds"
-  chIPMatPath: "chIPMat.h5"
-  maePath: "mae.rds"
-  atacMergedDir: "atac_fragments"
-  chipPeaksDir: "chip_peaks"
-  motifDhsDir: "motifs_dhs"
-  motifGenomeDir: "motifs_genome"
-  tfblearnerPredDir: "predictions/TFBlearner"
-  bmoPredDir: "predictions/BMO"
-  topPredDir: "predictions/TOP"
-  maxAtacPredDir: "predictions/maxATAC"
+  holdoutSet: ""
+  outPath: ""
+  methodsDir: ""
+  dhsCoordsPath: ""
+  blPath: ""
+  combsPath: ""
+  binCoordsPath: ""
+  fullChrBinOvsPath: ""
+  labelsDhsPath: ""
+  labelsFullChrPath: ""
+  chIPMatPath: ""
+  maePath: ""
+  atacMergedDir: ""
+  chipPeaksDir: ""
+  motifDhsDir: ""
+  motifGenomeDir: ""
   seed: 43
   threads: 4
+  rerun: FALSE
 ---
 
 ```{r setup, include=FALSE}
@@ -33,7 +30,11 @@ library(GenomicAlignments)
 library(Rsamtools)
 library(rtracklayer)
 library(ggplot2)
-source("utils.R")
+source("Comparison/src/utils.R")
+
+should_rerun <- function(outputs, rerun=as.logical(params$rerun)){
+  (isTRUE(rerun) || !all(file.exists(outputs)))
+}
 ```
 
 ```{r, params}
@@ -42,24 +43,37 @@ holdoutSet <- params$holdoutSet
 valChrs <- c("chr2", "chr4", "chr9")
 ```
 
+```{r, load labels}
+labels.dhs <- readRDS(params$labelsDhsPath)
+labels.full <- readRDS(params$labelsFullChrPath)
+```
+
 # PR on DHS
 
 ```{r, import data}
 # TODO: stratify in two
-tfblearnerDir <- file.path(params$tfblearnerPredDir, holdoutSet)
+tfblearnerDir <- file.path(params$methodsDir, "TFBlearner", holdoutSet)
 if(dir.exists(tfblearnerDir)){
   tfblearnerBasicExists <- grepl("basic", list.files(tfblearnerDir))
   tfblearnerAddSupportExists <- grepl("addSupport", list.files(tfblearnerDir))
+}else{
+  tfblearnerBasicExists <- FALSE
+  tfblearnerAddSupportExists <- FALSE
 }
 
-maxatacDir <- file.path(params$maxAtacPredDir, holdoutSet)
+maxatacDir <- file.path(params$methodsDir, "maxATAC", holdoutSet)
 if(dir.exists(maxatacDir)){
   maxatac100Exists <- dir.exists(file.path(maxatacDir, "100"))
   maxatac20Exists <- dir.exists(file.path(maxatacDir, "20"))
+}else{
+  maxatac100Exists <- FALSE
+  maxatac20Exists <- FALSE
 }
 
-bmoExists <- dir.exists(params$bmoPredDir)
-topExists <- dir.exists(params$topPredDir)
+bmoPredDir <- file.path(params$methodsDir, "BMO")
+bmoExists <- dir.exists(bmoPredDir)
+topPredDir <- file.path(params$methodsDir, "TOP", holdoutSet)
+topExists <- dir.exists(topPredDir)
 
 dhsCoords <- fread(params$dhsCoordsPath, 
                    col.names=c("chr", "start", "end"), 
@@ -69,9 +83,8 @@ combinations[,comb:=paste(TF, CellularContext, sep="_")]
 testCombinations <- subset(combinations, set=="testData")
 trainCombinations <- subset(combinations, set=="trainData")
 
-dhsCoordsDt <- as.data.table(dhsCoords)
-dhsCoordsDt <- subset(dhsCoordsDt, chr %in% valChrs)
-dhsCoordsSub <- makeGRangesFromDataFrame(as.data.frame(dhsCoordsDt))
+dhsCoordsSub <- makeGRangesFromDataFrame(as.data.frame(labels.dhs))
+dhsCoordsSub <- unique(dhsCoordsSub)
 
 # bins full genome
 binCoords <- fread(params$binCoordsPath, 
@@ -99,9 +112,22 @@ colnames(chIPFullMat) <- paste("any", colnames(chIPFullMat), sep="_")
 ```
 
 ```{r, compute pr curves}
+blackListedRegions <- fread(params$blPath, 
+                            select=1:3, 
+                            col.names=c("chr", "start", "end"))
+blackListedRegions <- makeGRangesFromDataFrame(as.data.frame(blackListedRegions))
+
 compute.pr.all.sets <- function(scoresDt, labelsDt, seed=42){
   
   mappedPredDt <- cbind(scoresDt, labelsDt)
+  
+  # remove blacklisted regions from evaluation
+  mappedPredDt <- makeGRangesFromDataFrame(as.data.frame(mappedPredDt),
+                                           keep.extra.columns=TRUE)
+  mappedPredDt <- subsetByOverlaps(mappedPredDt, blackListedRegions,
+                                   invert=TRUE, type="any")
+  mappedPredDt <- as.data.table(mappedPredDt)
+   
   mappedPredDt[,hc.any.ov:=fifelse(hc.any.ov>0, TRUE, FALSE)]
   mappedPredDt[,hc.peak.ov :=fifelse(hc.peak.ov>0, TRUE, FALSE)]
   pr.dt <- data.table()
@@ -232,6 +258,14 @@ compute.subset.stats <- function(scoresDt, labelsDt, seed=100){
   set.seed(seed)
   
   mappedPredDt <- cbind(scoresDt, labelsDt)
+  
+  # remove blacklisted regions from evaluation
+  mappedPredDt <- makeGRangesFromDataFrame(as.data.frame(mappedPredDt),
+                                           keep.extra.columns=TRUE)
+  mappedPredDt <- subsetByOverlaps(mappedPredDt, blackListedRegions,
+                                   invert=TRUE, type="any")
+  mappedPredDt <- as.data.table(mappedPredDt)
+  
   mappedPredDt[,hc.any.ov:=fifelse(hc.any.ov>0, TRUE, FALSE)]
   mappedPredDt[,hc.peak.ov :=fifelse(hc.peak.ov>0, TRUE, FALSE)]
   
@@ -547,14 +581,30 @@ compute.subset.stats <- function(scoresDt, labelsDt, seed=100){
   
   return(pr.dt)
 }
+
+withinMappingScores <- function(refRanges, predDt){
+  predRanges <- makeGRangesFromDataFrame(as.data.frame(predDt))
+  ovDt <- as.data.table(findOverlaps(predRanges, refRanges, type="within"))
+  ovDt$pred_score <- predDt[ovDt$queryHits, "pred_score"]
+  ovPred <- ovDt[,.(max(pred_score)), by=(subjectHits)]
+  mappedPreds <- sparseMatrix(i=ovPred$subjectHits, 
+                              j=rep(1, nrow(ovPred)), 
+                              x=ovPred$V1,
+                              dims=c(length(refRanges),1))
+  
+  return(mappedPreds)
+}
 ```
 
-```{r, load labels}
-labels.dhs <- readRDS(params$labelsDhsPath)
-labels.full <- readRDS(params$labelsFullChrPath)
+```{r, rerun c-score}
+reRunCScore <- should_rerun(c(
+  file.path(params$outPath, "pr.cScores.dhs.rds"),
+  file.path(params$outPath, "pr.cScore.subsets.dhs.rds"),
+  file.path(params$outPath, "pr.cScore.full.rds"),
+  file.path(params$outPath, "pr.cScore.subsets.full.rds")))
 ```
 
-```{r, performance c-score, eval=FALSE}
+```{r, performance c-score, eval=reRunCScore}
 pr.cScore.dhs <- list()
 pr.cScore.subsets.dhs <- list()
 
@@ -631,7 +681,15 @@ pr.cScore.subsets.full$model <- "C-score"
 saveRDS(pr.cScore.subsets.full, file.path(params$outPath, "pr.cScore.subsets.full.rds"))
 ```
 
-```{r, performance c-score distinct TFs, eval=FALSE}
+```{r, rerun c-score distinct}
+reRunCScoreDistinct <- should_rerun(c(
+  file.path(params$outPath, "pr.cScores.uni.dhs.rds"),
+  file.path(params$outPath, "pr.cScore.uni.subsets.dhs.rds"),
+  file.path(params$outPath, "pr.cScore.uni.full.rds"),
+  file.path(params$outPath, "pr.cScore.uni.subsets.full.rds")))
+```
+
+```{r, performance c-score distinct TFs, eval=reRunCScoreDistinct}
 pr.cScore.dhs <- list()
 pr.cScore.subsets.dhs <- list()
 
@@ -710,9 +768,16 @@ pr.cScore.subsets.full$model <- "C-score.unique"
 saveRDS(pr.cScore.subsets.full, file.path(params$outPath, "pr.cScore.uni.subsets.full.rds"))
 ```
 
-TODO: Check whats the difference here in terms of closest cellType => is the above bloc get ATAC-matrices still needed?
-TODO: check with objects in other directory 
-```{r, prepare ATAC-Data}
+```{r, rerun ATAC-fragments counting}
+reRunATAC <- should_rerun(c(
+  "totalOverlaps.full.rds",
+  "totalOverlaps.dhs.rds",
+  "nfOverlaps.full.rds",
+  "nfOverlaps.dhs.rds"
+))
+```
+
+```{r, prepare ATAC-Data, eval=reRunATAC}
 param <- ScanBamParam(what=c("qname", "flag", "rname", 
                                "strand", "pos", "isize"),
                       tag=c("CB", "UB"))
@@ -754,10 +819,10 @@ for(context in contexts){
                                                                 atacFragDhs, 
                                                                 byCols="context")
 }
-saveRDS(totalOverlaps.full, "totalOverlaps.full.rds")
-saveRDS(totalOverlaps.dhs, "totalOverlaps.dhs.rds")
-saveRDS(nfOverlaps.full, "nfOverlaps.full.rds")
-saveRDS(nfOverlaps.dhs, "nfOverlaps.dhs.rds")
+saveRDS(totalOverlaps.full, file.path(params$outPath,"totalOverlaps.full.rds"))
+saveRDS(totalOverlaps.dhs, file.path(params$outPath, "totalOverlaps.dhs.rds"))
+saveRDS(nfOverlaps.full, file.path(params$outPath, "nfOverlaps.full.rds"))
+saveRDS(nfOverlaps.dhs, file.path(params$outPath, "nfOverlaps.dhs.rds"))
 
 atacMatDhs <- Reduce("cbind", totalOverlaps.dhs[-1], totalOverlaps.dhs[[1]])
 atacMatDhs <- as(atacMatDhs, "CsparseMatrix")
@@ -765,7 +830,16 @@ atacMatFull <-  Reduce("cbind", totalOverlaps.full[-1], totalOverlaps.full[[1]])
 atacMatFull <- as(atacMatFull, "CsparseMatrix")
 ```
 
-```{r, performance nucleosome-free overlaps}
+```{r, rerun nucleosome-fragments performance}
+reRunNucFree <- should_rerun(c(
+  file.path(params$outPath, "pr.acc.nf.dhs.rds"),
+  file.path(params$outPath, "pr.acc.nf.subsets.dhs.rds"),
+  file.path(params$outPath, "pr.acc.nf.full.rds"),
+  file.path(params$outPath, "pr.acc.nf.subsets.full.rds")
+))
+```
+
+```{r, performance nucleosome-free overlaps, eval=reRunNucFree}
 pr.acc.nf.dhs <- list()
 pr.acc.nf.subsets.dhs <- list()
 
@@ -815,7 +889,14 @@ pr.acc.nf.subsets.full$model <- "ATAC.nucleosomefree"
 saveRDS(pr.acc.nf.subsets.full, file.path(params$outPath, "pr.acc.nf.subsets.full.rds"))
 ```
 
-```{r, performance total overlaps, eval=FALSE}
+```{r, rerun total-overlaps performance}
+reRunTotOv <- should_rerun(c(file.path(params$outPath, "pr.acc.to.dhs.rds"),
+                             file.path(params$outPath, "pr.acc.to.subsets.dhs.rds"),
+                             file.path(params$outPath, "pr.acc.to.full.rds"),
+                             file.path(params$outPath, "pr.acc.to.subsets.full.rds")))
+```
+
+```{r, performance total overlaps, eval=reRunTotOv}
 pr.acc.to.dhs <- list()
 pr.acc.to.subsets.dhs <- list()
 
@@ -865,8 +946,16 @@ pr.acc.to.subsets.full$model <- "ATAC.totaloverlaps"
 saveRDS(pr.acc.to.subsets.full, file.path(params$outPath, "pr.acc.to.subsets.full.rds"))
 ```
 
+```{r, rerun closest chip}
+reRunClosestChIP <- should_rerun(c(
+  file.path(params$outPath, "pr.chip.nearest.dhs.rds"),
+  file.path(params$outPath, "pr.chip.nearest.subsets.dhs.rds"),
+  file.path(params$outPath, "pr.chip.nearest.full.rds"),
+  file.path(params$outPath, "pr.chip.nearest.subsets.full.rds")
+))
+```
 
-```{r, closest cell-type performance, eval=FALSE}
+```{r, closest cell-type performance, eval=reRunClosestChIP}
 pr.chip.nearest.dhs <- list()
 pr.chip.nearest.subsets.dhs <- list()
 
@@ -949,7 +1038,16 @@ pr.chip.nearest.subsets.full$model <- "ChIP.nearest"
 saveRDS(pr.chip.nearest.subsets.full, file.path(params$outPath, "pr.chip.nearest.subsets.full.rds"))
 ```
 
-```{r, mean ChIP performance, eval=FALSE}
+```{r, rerun mean chip}
+reRunMeanChIP <- should_rerun(c(
+  file.path(params$outPath, "pr.chip.mean.dhs.rds"),
+  file.path(params$outPath, "pr.chip.mean.subsets.dhs.rds"),
+  file.path(params$outPath, "pr.chip.mean.full.rds"),
+  file.path(params$outPath, "pr.chip.mean.subsets.full.rds")
+))
+```
+
+```{r, mean ChIP performance, eval=reRunMeanChIP}
 pr.chip.mean.dhs <- list()
 pr.chip.mean.subsets.dhs <- list()
 
@@ -1022,7 +1120,16 @@ pr.chip.mean.subsets.full$model <- "ChIP.mean"
 saveRDS(pr.chip.mean.subsets.full, file.path(params$outPath, "pr.chip.mean.subsets.full.rds"))
 ```
 
-```{r, max ChIP performance, eval=FALSE}
+```{r, rerun max chip}
+reRunMaxChIP <- should_rerun(c(
+  file.path(params$outPath, "pr.chip.max.dhs.rds"),
+  file.path(params$outPath, "pr.chip.max.subsets.dhs.rds"),
+  file.path(params$outPath, "pr.chip.max.full.rds"),
+  file.path(params$outPath, "pr.chip.max.subsets.full")
+))
+```
+
+```{r, max ChIP performance, eval=reRunMaxChIP}
 pr.chip.max.dhs <- list()
 pr.chip.max.subsets.dhs <- list()
 
@@ -1091,10 +1198,19 @@ saveRDS(pr.chip.max.full, file.path(params$outPath, "pr.chip.max.full.rds"))
 pr.chip.max.subsets.full <- rbindlist(pr.chip.max.subsets.full, idcol="comb", fill=TRUE)
 pr.chip.max.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
 pr.chip.max.subsets.full$model <- "ChIP.max"
-saveRDS(pr.chip.max.subsets.full, file.path(params$outPath, "pr.chip.max.subsets.full")
+saveRDS(pr.chip.max.subsets.full, file.path(params$outPath, "pr.chip.max.subsets.full"))
 ```
 
-```{r, any ChIP performance}
+```{r, rerun any chip}
+reRunAnyChIP <- should_rerun(c(
+  file.path(params$outPath, "pr.chip.any.dhs.rds"),
+  file.path(params$outPath, "pr.chip.any.subsets.dhs.rds"),
+  file.path(params$outPath, "pr.chip.any.full.rds"),
+  file.path(params$outPath, "pr.chip.any.subsets.full.rds")
+))
+```
+
+```{r, any ChIP performance, eval=reRunAnyChIP}
 pr.chip.any.dhs <- list()
 pr.chip.any.subsets.dhs <- list()
 
@@ -1167,7 +1283,16 @@ pr.chip.any.subsets.full$model <- "ChIP.any"
 saveRDS(pr.chip.any.subsets.full, file.path(params$outPath, "pr.chip.any.subsets.full.rds"))
 ```
 
-```{r, performance ATAC+motif}
+```{r, rerun ATAC+motif}
+reRunATACMotif<- should_rerun(c(
+  file.path(params$outPath, "pr.motifATAC.dhs.rds"),
+  file.path(params$outPath, "pr.motifATAC.subsets.dhs.rds"),
+  file.path(params$outPath, "pr.motifATAC.full.rds"),
+  file.path(params$outPath, "pr.motifATAC.subsets.full.rds")
+))
+```
+
+```{r, performance ATAC+motif, eval=reRunATACMotif}
 pr.motifATAC.dhs <- list()
 pr.motifATAC.subsets.dhs <- list()
 
@@ -1244,335 +1369,16 @@ pr.motifATAC.subsets.full$model <- "ATAC+motif"
 saveRDS(pr.motifATAC.subsets.full, file.path(params$outPath, "pr.motifATAC.subsets.full.rds"))
 ```
 
-```{r, performance TFBlearner,  eval=tfblearnerBasicExists}
-pr.TFBlearner.basic.dhs <- list()
-pr.TFBlearner.basic.subsets.dhs <- list()
-
-pr.TFBlearner.basic.full <- list()
-pr.TFBlearner.basic.subsets.full <- list()
-
-pr.TFBlearner.basic.extended.full <- list()
-pr.TFBlearner.basic.extended.subsets.full <- list()
-
-for(testComb in unique(testCombinations$comb)){
-  tf <- unlist(tstrsplit(testComb, split="_", keep=1))
-  testContext <- unlist(tstrsplit(testComb, split="_", keep=2))
-  predFile <- file.path(params$tfblearnerPredDir, 
-                        holdoutSet,
-                        paste(tf, "pred_basic_model.rds", sep="_"))
-  if(!file.exists(predFile)) next
-  preds <- readRDS(predFile)
-  
-  labelsDt <- subset(labels.dhs, comb==testComb)
-  
-  predDt <-  as.data.table(rowRanges(preds))[,c("seqnames", "start", "end")]
-  modDt <- as.data.table(as.matrix(assays(preds)[["pred_stacked"]][,testContext]))
-  context <- colnames(modDt)
-  colnames(modDt) <- "pred_score"
-  predDt <- cbind(predDt, modDt)
-  labelsCoords <- labelsDt[,c("seqnames", "start", "end"), with=FALSE]
-  predDt <- merge(as.data.table(labelsCoords), 
-                  predDt, 
-                  by.x=c("seqnames","start","end"), 
-                  by.y=c("seqnames","start","end"), 
-                  all=FALSE)
-  pr.stats <- compute.pr.all.sets(predDt[,c("pred_score"), with=FALSE], 
-                                  labelsDt)
-  pr.TFBlearner.basic.subsets.dhs[[testComb]] <- compute.subset.stats(predDt[,c("pred_score"), with=FALSE], 
-                                                                      labelsDt)
-  pr.TFBlearner.basic.dhs[[testComb]] <- pr.stats
-  
-  predDt$tf <- tf
-  mappedPredsFull1 <- genomicRangesMapping(binRanges, 
-                                           predDt, 
-                                           scoreCol="pred_score",
-                                           aggregationFun=max,
-                                           byCols="tf", 
-                                           type="within")
-  mappedPredsFull2 <- genomicRangesMapping(binRanges, 
-                                           predDt, 
-                                           scoreCol="pred_score",
-                                           aggregationFun=max,
-                                           byCols="tf")
-  predScoreFull <- fifelse(mappedPredsFull1[,1,drop=TRUE]>0, 
-                           mappedPredsFull1[,1,drop=TRUE],
-                           mappedPredsFull2[,1,drop=TRUE])
-  mappedPredFullDt <- data.table(pred_score=predScoreFull)
-  
-  labelsFullDt <- subset(labels.full, comb==testComb)
-  pr.stats <- compute.pr.all.sets(mappedPredFullDt, labelsFullDt)
-  pr.stats.subsets <- compute.subset.stats(mappedPredFullDt, labelsFullDt)
-  
-  pr.TFBlearner.basic.subsets.full[[testComb]] <- pr.stats.subsets
-  pr.TFBlearner.basic.full[[testComb]] <- pr.stats
-  
-  # map ATAC-data to zeroes
-  nfFrags <- nfOverlaps.full[[testContext]][,1,drop=TRUE]
-  minPScore <- min(predScoreFull[which(predScoreFull>0)])
-  minPScore <- minPScore/max(sqrt(nfFrags))
-  nfScore <- minPScore*sqrt(nfFrags)
-  predScoreFull <- fifelse(predScoreFull>0,
-                           predScoreFull,
-                           nfScore)
-  mappedPredFullDt <- data.table(pred_score=predScoreFull)
-  
-  labelsFullDt <- subset(labels.full, comb==testComb)
-  pr.stats <- compute.pr.all.sets(mappedPredFullDt, labelsFullDt)
-  pr.stats.subsets <- compute.subset.stats(mappedPredFullDt, labelsFullDt)
-  
-  pr.TFBlearner.basic.extended.full[[testComb]] <- pr.stats
-  pr.TFBlearner.basic.extended.subsets.full[[testComb]] <- pr.stats.subsets
-}
-
-pr.TFBlearner.basic.dhs <- rbindlist(pr.TFBlearner.basic.dhs, 
-                                     idcol="comb", fill=TRUE)
-pr.TFBlearner.basic.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.basic.dhs$model <- "TFBlearner.basic"
-saveRDS(pr.TFBlearner.basic.dhs, file.path(params$outPath, "pr.TFBlearner.basic.dhs.rds"))
-
-pr.TFBlearner.basic.subsets.dhs <- rbindlist(pr.TFBlearner.basic.subsets.dhs, idcol="comb", fill=TRUE)
-pr.TFBlearner.basic.subsets.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.basic.subsets.dhs$model <- "TFBlearner.basic"
-saveRDS(pr.TFBlearner.basic.subsets.dhs, file.path(params$outPath, "pr.TFBlearner.basic.subsets.dhs.rds"))
-
-pr.TFBlearner.basic.full <- rbindlist(pr.TFBlearner.basic.full, 
-                                      idcol="comb", fill=TRUE)
-pr.TFBlearner.basic.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.basic.full$model <- "TFBlearner.basic"
-saveRDS(pr.TFBlearner.basic.full, file.path(params$outPath, "pr.TFBlearner.basic.full.rds"))
-
-pr.TFBlearner.basic.subsets.full <- rbindlist(pr.TFBlearner.basic.subsets.full, idcol="comb", fill=TRUE)
-pr.TFBlearner.basic.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.basic.subsets.full$model <- "TFBlearner.basic"
-saveRDS(pr.TFBlearner.basic.subsets.full, file.path(params$outPath, "pr.TFBlearner.basic.subsets.full.rds"))
-
-pr.TFBlearner.basic.extended.full <- rbindlist(pr.TFBlearner.basic.extended.full, 
-                                               idcol="comb", fill=TRUE)
-pr.TFBlearner.basic.extended.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.basic.extended.full$model <- "TFBlearner.basic.extended"
-saveRDS(pr.TFBlearner.basic.extended.full, file.path(params$outPath, "pr.TFBlearner.basic.extended.full.rds"))
-
-pr.TFBlearner.basic.extended.subsets.full <- rbindlist(pr.TFBlearner.basic.extended.subsets.full, idcol="comb", fill=TRUE)
-pr.TFBlearner.basic.extended.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.basic.extended.subsets.full$model <- "TFBlearner.basic.extended"
-saveRDS(pr.TFBlearner.basic.extended.subsets.full, file.path(params$outPath, "pr.TFBlearner.basic.extended.subsets.full.rds"))
+```{r, rerun FIMO}
+reRunFIMO <- should_rerun(c(
+  file.path(params$outPath, "pr.FIMO.dhs.rds"),
+  file.path(params$outPath, "pr.FIMO.basic.subsets.dhs.rds"),
+  file.path(params$outPath, "pr.FIMO.full.rds"),
+  file.path(params$outPath, "pr.FIMO.basic.subsets.full.rds")
+))
 ```
 
-```{r, performance TFBlearner full, eval=tfblearnerAddSupportExists}
-pr.TFBlearner.full.dhs <- list()
-pr.TFBlearner.full.subsets.dhs <- list()
-
-pr.TFBlearner.full.full <- list()
-pr.TFBlearner.full.subsets.full <- list()
-
-pr.TFBlearner.full.extended.full <- list()
-pr.TFBlearner.full.extended.subsets.full <- list()
-
-pr.TFBlearner.full.weighted.subsets.full <- list()
-pr.TFBlearner.full.weighted.full <- list()
-
-pr.TFBlearner.full.centered.subsets.full <- list()
-pr.TFBlearner.full.centered.full <- list()
-
-for(testComb in unique(testCombinations$comb)){
-  print(testComb)
-  tf <- unlist(tstrsplit(testComb, split="_", keep=1))
-  testContext <- unlist(tstrsplit(testComb, split="_", keep=2))
-  predFile <- file.path(params$tfblearnerPredDir, 
-                        holdoutSet,
-                        paste(tf, "pred_addSupport_model.rds", sep="_"))
-  if(!file.exists(predFile)) next
-  preds <- readRDS(predFile)
-  
-  labelsDt <- subset(labels.dhs, comb==testComb)
-  
-  predDt <-  as.data.table(rowRanges(preds))[,c("seqnames", "start", "end")]
-  modDt <- as.data.table(as.matrix(assays(preds)[["pred_stacked"]][,testContext]))
-  context <- colnames(modDt)
-  colnames(modDt) <- "pred_score"
-  predDt <- cbind(predDt, modDt)
-  labelsCoords <- labelsDt[,c("seqnames", "start", "end"), with=FALSE]
-  predDt <- merge(as.data.table(labelsCoords), 
-                  predDt, 
-                  by.x=c("seqnames","start","end"), 
-                  by.y=c("seqnames","start","end"), 
-                  all=FALSE)
-  pr.stats <- compute.pr.all.sets(predDt[,c("pred_score"), with=FALSE], 
-                                  labelsDt)
-  pr.stats.subsets <- compute.subset.stats(predDt[,c("pred_score"), with=FALSE], 
-                                           labelsDt)
-
-  pr.TFBlearner.full.subsets.dhs[[testComb]] <- pr.stats.subsets
-  pr.TFBlearner.full.dhs[[testComb]] <- pr.stats
-
-  predDt$tf <- tf
-  mappedPredsFull1 <- genomicRangesMapping(binRanges, 
-                                           predDt, 
-                                           scoreCol="pred_score",
-                                           aggregationFun=max,
-                                           byCols="tf", 
-                                           type="within")
-  mappedPredsFull2 <- genomicRangesMapping(binRanges, 
-                                           predDt, 
-                                           scoreCol="pred_score",
-                                           aggregationFun=max,
-                                           byCols="tf")
-  predScoreFull <- fifelse(mappedPredsFull1[,1,drop=TRUE]>0, 
-                           mappedPredsFull1[,1,drop=TRUE],
-                           mappedPredsFull2[,1,drop=TRUE])
-  mappedPredFullDt <- data.table(pred_score=predScoreFull)
-  
-  labelsFullDt <- subset(labels.full, comb==testComb)
-  pr.stats <- compute.pr.all.sets(mappedPredFullDt, labelsFullDt)
-  pr.stats.subsets <- compute.subset.stats(mappedPredFullDt, labelsFullDt)
-  
-  pr.TFBlearner.full.subsets.full[[testComb]] <- pr.stats.subsets
-  pr.TFBlearner.full.full[[testComb]] <- pr.stats
-  
-  # center overlaps ------------------------------------------------------------
-  
-  predCenterDt <- copy(predDt)
-  predCenterDt[,center:=floor((end-start)/2)+start]
-  predCenterDt[,start:=center]
-  predCenterDt[,end:=center]
-  mappedPredsCenter <- genomicRangesMapping(binRanges, 
-                                            predDt, 
-                                            scoreCol="pred_score",
-                                            aggregationFun=max,
-                                            byCols="tf", 
-                                            type="within")
-  
-  labelsFullDt <- subset(labels.full, comb==testComb)
-  mappedPredsCenterDt <- data.table(pred_score=mappedPredsCenter[,1])
-  pr.stats <- compute.pr.all.sets(mappedPredsCenterDt, labelsFullDt)
-  pr.stats.subsets <- compute.subset.stats(mappedPredsCenterDt, labelsFullDt)
-  
-  pr.TFBlearner.full.centered.subsets.full[[testComb]] <- pr.stats.subsets
-  pr.TFBlearner.full.centered.full[[testComb]] <- pr.stats
-  
-  # weighted by overlap --------------------------------------------------------
-  
-  predRanges <- makeGRangesFromDataFrame(as.data.frame(predDt))
-  ov <- findOverlaps(binRanges, predRanges, 
-                     type="any", 
-                     select="all")
-  ovRanges <- pintersect(binRanges[queryHits(ov)], 
-                         predRanges[subjectHits(ov)], 
-                         drop.nohit.ranges=FALSE)
-  ovWidth <- width(ovRanges)
-  overlapDt <- as.data.table(ov)
-  overlapDt$width <- ovWidth
-  overlapDt[,weight:=width/unique(width(binRanges))]
-  overlapDt[,p:=predDt$pred_score[overlapDt$subjectHits]]
-  overlapDt[,diff:=200-sum(width), by=queryHits]
-  overlapZeroDt <- subset(unique(overlapDt, by=c("queryHits")), diff>0)
-  overlapDt$diff <- NULL
-  overlapZeroDt$width <- NULL
-  overlapZeroDt$p <- 0
-  overlapZeroDt[,weight:=diff/200]
-  setnames(overlapZeroDt, c("diff"), c("width"))
-  overlapDt <- rbind(overlapDt, overlapZeroDt, use.names=TRUE, fill=TRUE)
-  mappedWeightedPredsFull1 <- overlapDt[,.(pred_score=sum(weight*p)/.N), 
-                                         by=queryHits]
-  mappedWeightedPredsFull2 <- data.table(queryHits=setdiff(1:length(binRanges), 
-                                         mappedWeightedPredsFull1$queryHits), 
-                                         pred_score=0)
-  mappedWeightedPredsFullDt <- rbind(mappedWeightedPredsFull1,
-                                     mappedWeightedPredsFull2,
-                                     fill=TRUE, use.names=TRUE)
-  setorder(mappedWeightedPredsFullDt, queryHits)
-  labelsFullDt <- subset(labels.full, comb==testComb)
-  pr.stats <- compute.pr.all.sets(mappedWeightedPredsFullDt, labelsFullDt)
-  pr.stats.subsets <- compute.subset.stats(mappedWeightedPredsFullDt, 
-                                           labelsFullDt)
-  
-  pr.TFBlearner.full.weighted.subsets.full[[testComb]] <- pr.stats.subsets
-  pr.TFBlearner.full.weighted.full[[testComb]] <- pr.stats
-  
-  # map ATAC-data to zeroes
-  nfFrags <- nfOverlaps.full[[testContext]][,1,drop=TRUE]
-  minPScore <- min(predScoreFull[which(predScoreFull>0)])
-  minPScore <- minPScore/max(sqrt(nfFrags))
-  nfScore <- minPScore*sqrt(nfFrags)
-  predScoreFull <- fifelse(predScoreFull>0,
-                           predScoreFull,
-                           nfScore)
-  mappedPredFullDt <- data.table(pred_score=predScoreFull)
-  
-  labelsFullDt <- subset(labels.full, comb==testComb)
-  pr.stats <- compute.pr.all.sets(mappedPredFullDt, labelsFullDt)
-  pr.stats.subsets <- compute.subset.stats(mappedPredFullDt, labelsFullDt)
-  
-  pr.TFBlearner.full.extended.full[[testComb]] <- pr.stats
-  pr.TFBlearner.full.extended.subsets.full[[testComb]] <- pr.stats.subsets
-}
-
-pr.TFBlearner.full.dhs <- rbindlist(pr.TFBlearner.full.dhs, 
-                                    idcol="comb", fill=TRUE)
-pr.TFBlearner.full.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.full.dhs$model <- "TFBlearner.full"
-saveRDS(pr.TFBlearner.full.dhs, file.path(params$outPath, "pr.TFBlearner.full.dhs.rds"))
-
-pr.TFBlearner.full.subsets.dhs <- rbindlist(pr.TFBlearner.full.subsets.dhs, 
-                                            idcol="comb", fill=TRUE)
-pr.TFBlearner.full.subsets.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.full.subsets.dhs$model <- "TFBlearner.full"
-saveRDS(pr.TFBlearner.full.subsets.dhs, file.path(params$outPath, "pr.TFBlearner.full.subsets.dhs.rds"))
-
-pr.TFBlearner.full.full <- rbindlist(pr.TFBlearner.full.full, 
-                                     idcol="comb", fill=TRUE)
-pr.TFBlearner.full.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.full.full$model <- "TFBlearner.full"
-saveRDS(pr.TFBlearner.full.full, file.path(params$outPath, "pr.TFBlearner.full.full.rds"))
-
-pr.TFBlearner.full.subsets.full <- rbindlist(pr.TFBlearner.full.subsets.full, 
-                                             idcol="comb", fill=TRUE)
-pr.TFBlearner.full.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.full.subsets.full$model <- "TFBlearner.full"
-saveRDS(pr.TFBlearner.full.subsets.full, file.path(params$outPath, "pr.TFBlearner.full.subsets.full.rds"))
-
-pr.TFBlearner.full.extended.full <- rbindlist(pr.TFBlearner.full.extended.full, 
-                                     idcol="comb", fill=TRUE)
-pr.TFBlearner.full.extended.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.full.extended.full$model <- "TFBlearner.full.extended"
-saveRDS(pr.TFBlearner.full.extended.full, file.path(params$outPath, "pr.TFBlearner.full.extended.full.rds"))
-
-pr.TFBlearner.full.centered.full <- rbindlist(pr.TFBlearner.full.centered.full, 
-                                              idcol="comb", fill=TRUE)
-pr.TFBlearner.full.centered.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.full.centered.full$model <- "TFBlearner.full.centered"
-saveRDS(pr.TFBlearner.full.centered.full, file.path(params$outPath, "pr.TFBlearner.full.centered.full.rds"))
-
-pr.TFBlearner.full.extended.subsets.full <- rbindlist(pr.TFBlearner.full.extended.subsets.full, 
-                                                      idcol="comb", fill=TRUE)
-pr.TFBlearner.full.extended.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.full.extended.subsets.full$model <- "TFBlearner.full.extended"
-saveRDS(pr.TFBlearner.full.extended.subsets.full, file.path(params$outPath, "pr.TFBlearner.full.extended.subsets.full.rds"))
-
-
-pr.TFBlearner.full.weighted.full <- rbindlist(pr.TFBlearner.full.weighted.full, 
-                                              idcol="comb", fill=TRUE)
-pr.TFBlearner.full.weighted.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.full.weighted.full$model <- "TFBlearner.full.weighted"
-saveRDS(pr.TFBlearner.full.weighted.full, 
-        file.path(params$outPath, "pr.TFBlearner.full.weighted.full.rds"))
-
-pr.TFBlearner.full.weighted.subsets.full <- rbindlist(pr.TFBlearner.full.weighted.subsets.full, 
-                                                      idcol="comb", fill=TRUE)
-pr.TFBlearner.full.weighted.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.full.weighted.subsets.full$model <- "TFBlearner.full.weighted"
-saveRDS(pr.TFBlearner.full.weighted.subsets.full, 
-        file.path(params$outPath, "pr.TFBlearner.full.weighted.subsets.full.rds"))
-
-pr.TFBlearner.full.centered.subsets.full <- rbindlist(pr.TFBlearner.full.centered.subsets.full, 
-                                                      idcol="comb", fill=TRUE)
-pr.TFBlearner.full.centered.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TFBlearner.full.centered.subsets.full$model <- "TFBlearner.full.centered"
-saveRDS(pr.TFBlearner.full.centered.subsets.full, 
-        file.path(params$outPath, "pr.TFBlearner.full.centered.subsets.full.rds"))
-```
-
-```{r, performance FIMO}
+```{r, performance FIMO, eval=reRunFIMO}
 pr.FIMO.dhs <- list()
 pr.FIMO.basic.subsets.dhs <- list()
 
@@ -1586,15 +1392,12 @@ for(testComb in unique(testCombinations$comb)){
     predDt <- fread(motifFile, 
                     col.names=c("chr", "start", "end", 
                                 "tf", "score", "strand"))
-    mappedPreds1 <- genomicRangesMapping(dhsCoordsSub, 
-                                         predDt, 
-                                         scoreCol="score",
-                                         aggregationFun=max,
-                                         byCols="tf", 
-                                         type="within")
+    
+    setnames(predDt, "score", "pred_score")
+    mappedPreds1 <- withinMappingScores(dhsCoordsSub, predDt)
     mappedPreds2 <- genomicRangesMapping(dhsCoordsSub, 
                                          predDt, 
-                                         scoreCol="score",
+                                         scoreCol="pred_score",
                                          aggregationFun=max,
                                          byCols="tf")
     predScore <- fifelse(mappedPreds1[,1,drop=TRUE]>0, 
@@ -1614,15 +1417,11 @@ for(testComb in unique(testCombinations$comb)){
     predDt <- fread(motifFile, 
                     col.names=c("chr", "start", "end", 
                                 "tf", "score", "strand"))
-    mappedPredsFull1 <- genomicRangesMapping(binRanges, 
-                                             predDt, 
-                                             scoreCol="score",
-                                             aggregationFun=max,
-                                             byCols="tf", 
-                                             type="within")
+    setnames(predDt, "score", "pred_score")
+    mappedPredsFull1 <- withinMappingScores(binRanges, predDt)
     mappedPredsFull2 <- genomicRangesMapping(binRanges, 
                                              predDt, 
-                                             scoreCol="score",
+                                             scoreCol="pred_score",
                                              aggregationFun=max,
                                              byCols="tf")
     predScoreFull <- fifelse(mappedPredsFull1[,1,drop=TRUE]>0, 
@@ -1659,7 +1458,261 @@ pr.FIMO.basic.subsets.full$model <- "FIMO"
 saveRDS(pr.FIMO.basic.subsets.full, file.path(params$outPath, "pr.FIMO.basic.subsets.full.rds"))
 ```
 
-```{r, performance BMO DHS, eval=bmoExists}
+```{r, performance TFBlearner,  eval=tfblearnerBasicExists}
+pr.TFBlearner.basic.dhs <- list()
+pr.TFBlearner.basic.subsets.dhs <- list()
+
+pr.TFBlearner.basic.full <- list()
+pr.TFBlearner.basic.subsets.full <- list()
+
+pr.TFBlearner.basic.subsets.full.agg <- list()
+pr.TFBlearner.basic.full.agg <- list()
+
+for(testComb in unique(testCombinations$comb)){
+  tf <- unlist(tstrsplit(testComb, split="_", keep=1))
+  testContext <- unlist(tstrsplit(testComb, split="_", keep=2))
+  predFile <- file.path(tfblearnerDir,
+                        paste(tf, "pred_basic_model.rds", sep="_"))
+  if(!file.exists(predFile)) next
+  preds <- readRDS(predFile)
+  
+  labelsDt <- subset(labels.dhs, comb==testComb)
+  
+  predDt <-  as.data.table(rowRanges(preds))[,c("seqnames", "start", "end")]
+  modDt <- as.data.table(as.matrix(assays(preds)[["pred_stacked"]][,testContext]))
+  context <- colnames(modDt)
+  colnames(modDt) <- "pred_score"
+  predDt <- cbind(predDt, modDt)
+  labelsCoords <- labelsDt[,c("seqnames", "start", "end"), with=FALSE]
+  predDt <- merge(as.data.table(labelsCoords), 
+                  predDt, 
+                  by.x=c("seqnames","start","end"), 
+                  by.y=c("seqnames","start","end"), 
+                  all=FALSE)
+  pr.stats <- compute.pr.all.sets(predDt[,c("pred_score"), with=FALSE], 
+                                  labelsDt)
+  pr.TFBlearner.basic.subsets.dhs[[testComb]] <- compute.subset.stats(predDt[,c("pred_score"), with=FALSE], 
+                                                                      labelsDt)
+  pr.TFBlearner.basic.dhs[[testComb]] <- pr.stats
+  
+  predDt$tf <- tf
+  mappedPredsFull1 <- withinMappingScores(binRanges, predDt)
+  mappedPredsFull2 <- genomicRangesMapping(binRanges, 
+                                           predDt, 
+                                           scoreCol="pred_score",
+                                           aggregationFun=max,
+                                           byCols="tf")
+  predScoreFull <- fifelse(mappedPredsFull1[,1,drop=TRUE]>0, 
+                           mappedPredsFull1[,1,drop=TRUE],
+                           mappedPredsFull2[,1,drop=TRUE])
+  mappedPredFullDt <- data.table(pred_score=predScoreFull)
+  
+  labelsFullDt <- subset(labels.full, comb==testComb)
+  pr.stats <- compute.pr.all.sets(mappedPredFullDt, labelsFullDt)
+  pr.stats.subsets <- compute.subset.stats(mappedPredFullDt, labelsFullDt)
+  
+  pr.TFBlearner.basic.subsets.full[[testComb]] <- pr.stats.subsets
+  pr.TFBlearner.basic.full[[testComb]] <- pr.stats
+  
+  # aggregated by DHS ----------------------------------------------------------
+  
+  predDt$tf <- tf
+  predRanges <- makeGRangesFromDataFrame(as.data.frame(predDt))
+  binDiffRanges <- subsetByOverlaps(binRanges, predRanges, invert=TRUE)
+  whichDiff <- which(overlapsAny(binRanges, binDiffRanges))
+  
+  mappedPredsFull1 <- withinMappingScores(binDiffRanges, predDt)
+  mappedPredsFull2 <- genomicRangesMapping(binDiffRanges, 
+                                           predDt, 
+                                           scoreCol="pred_score",
+                                           aggregationFun=max,
+                                           byCols="tf", type="any")
+  predScoreFull <- fifelse(mappedPredsFull1[,1,drop=TRUE]>0, 
+                           mappedPredsFull1[,1,drop=TRUE],
+                           mappedPredsFull2[,1,drop=TRUE])
+  mappedPredFullDt <- data.table(pred_score=predScoreFull)
+  
+  labelsFullDt <- subset(labels.full, comb==testComb)[whichDiff,]
+  labelsDhsDt <- subset(labels.dhs, comb==testComb)
+  labelsAllDt <- rbind(labelsFullDt, labelsDhsDt, fill=TRUE, use.names=TRUE)
+  mappedPredAllDt <- rbind(mappedPredFullDt, predDt[,"pred_score", with=FALSE], 
+                           fill=TRUE, use.names=TRUE)
+  
+  pr.stats <- compute.pr.all.sets(mappedPredAllDt, labelsAllDt)
+  pr.stats.subsets <- compute.subset.stats(mappedPredAllDt, labelsAllDt)
+  
+  pr.TFBlearner.basic.subsets.full.agg[[testComb]] <- pr.stats.subsets
+  pr.TFBlearner.basic.full.agg[[testComb]] <- pr.stats
+}
+
+pr.TFBlearner.basic.dhs <- rbindlist(pr.TFBlearner.basic.dhs, 
+                                     idcol="comb", fill=TRUE)
+pr.TFBlearner.basic.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.TFBlearner.basic.dhs$model <- "TFBlearner.basic"
+saveRDS(pr.TFBlearner.basic.dhs, file.path(params$outPath, "pr.TFBlearner.basic.dhs.rds"))
+
+pr.TFBlearner.basic.subsets.dhs <- rbindlist(pr.TFBlearner.basic.subsets.dhs, idcol="comb", fill=TRUE)
+pr.TFBlearner.basic.subsets.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.TFBlearner.basic.subsets.dhs$model <- "TFBlearner.basic"
+saveRDS(pr.TFBlearner.basic.subsets.dhs, file.path(params$outPath, "pr.TFBlearner.basic.subsets.dhs.rds"))
+
+pr.TFBlearner.basic.full <- rbindlist(pr.TFBlearner.basic.full, 
+                                      idcol="comb", fill=TRUE)
+pr.TFBlearner.basic.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.TFBlearner.basic.full$model <- "TFBlearner.basic"
+saveRDS(pr.TFBlearner.basic.full, file.path(params$outPath, "pr.TFBlearner.basic.full.rds"))
+
+pr.TFBlearner.basic.subsets.full <- rbindlist(pr.TFBlearner.basic.subsets.full, idcol="comb", fill=TRUE)
+pr.TFBlearner.basic.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.TFBlearner.basic.subsets.full$model <- "TFBlearner.basic"
+saveRDS(pr.TFBlearner.basic.subsets.full, file.path(params$outPath, "pr.TFBlearner.basic.subsets.full.rds"))
+
+pr.TFBlearner.basic.subsets.full.agg <- rbindlist(pr.TFBlearner.basic.subsets.full.agg, 
+                                      idcol="comb", fill=TRUE)
+pr.TFBlearner.basic.subsets.full.agg[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.TFBlearner.basic.subsets.full.agg$model <- "TFBlearner.basic"
+saveRDS(pr.TFBlearner.basic.subsets.full.agg, 
+        file.path(params$outPath, "pr.TFBlearner.basic.subsets.full.agg.rds"))
+
+pr.TFBlearner.basic.full.agg <- rbindlist(pr.TFBlearner.basic.full.agg, 
+                                      idcol="comb", fill=TRUE)
+pr.TFBlearner.basic.full.agg[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.TFBlearner.basic.full.agg$model <- "TFBlearner.basic"
+saveRDS(pr.TFBlearner.basic.full.agg, 
+        file.path(params$outPath, "pr.TFBlearner.basic.full.agg.rds"))
+```
+
+```{r, performance TFBlearner full, eval=tfblearnerAddSupportExists}
+#eval=tfblearnerAddSupportExists
+pr.TFBlearner.full.dhs <- list()
+pr.TFBlearner.full.subsets.dhs <- list()
+
+pr.TFBlearner.full.full <- list()
+pr.TFBlearner.full.subsets.full <- list()
+
+pr.TFBlearner.full.subsets.full.agg <- list()
+pr.TFBlearner.full.full.agg <- list()
+
+for(testComb in unique(testCombinations$comb)){
+  print(testComb)
+  tf <- unlist(tstrsplit(testComb, split="_", keep=1))
+  testContext <- unlist(tstrsplit(testComb, split="_", keep=2))
+  predFile <- file.path(tfblearnerDir,
+                        paste(tf, "pred_addSupport_model.rds", sep="_"))
+  if(!file.exists(predFile)) next
+  preds <- readRDS(predFile)
+  
+  labelsDt <- subset(labels.dhs, comb==testComb)
+  
+  predDt <-  as.data.table(rowRanges(preds))[,c("seqnames", "start", "end")]
+  modDt <- as.data.table(as.matrix(assays(preds)[["pred_stacked"]][,testContext]))
+  context <- colnames(modDt)
+  colnames(modDt) <- "pred_score"
+  predDt <- cbind(predDt, modDt)
+  labelsCoords <- labelsDt[,c("seqnames", "start", "end"), with=FALSE]
+  predDt <- merge(as.data.table(labelsCoords), 
+                  predDt, 
+                  by.x=c("seqnames","start","end"), 
+                  by.y=c("seqnames","start","end"), 
+                  all=FALSE)
+  pr.stats <- compute.pr.all.sets(predDt[,c("pred_score"), with=FALSE], 
+                                  labelsDt)
+  pr.stats.subsets <- compute.subset.stats(predDt[,c("pred_score"), with=FALSE], 
+                                           labelsDt)
+
+  pr.TFBlearner.full.subsets.dhs[[testComb]] <- pr.stats.subsets
+  pr.TFBlearner.full.dhs[[testComb]] <- pr.stats
+
+  predDt$tf <- tf
+  mappedPredsFull1 <- withinMappingScores(binRanges, predDt)
+  mappedPredsFull2 <- genomicRangesMapping(binRanges, 
+                                           predDt, 
+                                           scoreCol="pred_score",
+                                           aggregationFun=max,
+                                           byCols="tf")
+  predScoreFull <- fifelse(mappedPredsFull1[,1,drop=TRUE]>0, 
+                           mappedPredsFull1[,1,drop=TRUE],
+                           mappedPredsFull2[,1,drop=TRUE])
+  mappedPredFullDt <- data.table(pred_score=predScoreFull)
+  
+  labelsFullDt <- subset(labels.full, comb==testComb)
+  pr.stats <- compute.pr.all.sets(mappedPredFullDt, labelsFullDt)
+  pr.stats.subsets <- compute.subset.stats(mappedPredFullDt, labelsFullDt)
+  
+  pr.TFBlearner.full.subsets.full[[testComb]] <- pr.stats.subsets
+  pr.TFBlearner.full.full[[testComb]] <- pr.stats
+  
+  # aggregated by DHS ----------------------------------------------------------
+  
+  predDt$tf <- tf
+  predRanges <- makeGRangesFromDataFrame(as.data.frame(predDt))
+  binDiffRanges <- subsetByOverlaps(binRanges, predRanges, invert=TRUE)
+  whichDiff <- which(overlapsAny(binRanges, binDiffRanges))
+  
+  mappedPredsFull1 <- withinMappingScores(binDiffRanges, predDt)
+  mappedPredsFull2 <- genomicRangesMapping(binDiffRanges, 
+                                           predDt, 
+                                           scoreCol="pred_score",
+                                           aggregationFun=max,
+                                           byCols="tf", type="any")
+  predScoreFull <- fifelse(mappedPredsFull1[,1,drop=TRUE]>0, 
+                           mappedPredsFull1[,1,drop=TRUE],
+                           mappedPredsFull2[,1,drop=TRUE])
+  mappedPredFullDt <- data.table(pred_score=predScoreFull)
+  
+  labelsFullDt <- subset(labels.full, comb==testComb)[whichDiff,]
+  labelsDhsDt <- subset(labels.dhs, comb==testComb)
+  labelsAllDt <- rbind(labelsFullDt, labelsDhsDt, fill=TRUE, use.names=TRUE)
+  mappedPredAllDt <- rbind(mappedPredFullDt, predDt[,"pred_score", with=FALSE], 
+                           fill=TRUE, use.names=TRUE)
+  
+  pr.stats <- compute.pr.all.sets(mappedPredAllDt, labelsAllDt)
+  pr.stats.subsets <- compute.subset.stats(mappedPredAllDt, labelsAllDt)
+  
+  pr.TFBlearner.full.subsets.full.agg[[testComb]] <- pr.stats.subsets
+  pr.TFBlearner.full.full.agg[[testComb]] <- pr.stats
+}
+
+pr.TFBlearner.full.dhs <- rbindlist(pr.TFBlearner.full.dhs, 
+                                    idcol="comb", fill=TRUE)
+pr.TFBlearner.full.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.TFBlearner.full.dhs$model <- "TFBlearner.full"
+saveRDS(pr.TFBlearner.full.dhs, file.path(params$outPath, "pr.TFBlearner.full.dhs.rds"))
+
+pr.TFBlearner.full.subsets.dhs <- rbindlist(pr.TFBlearner.full.subsets.dhs, 
+                                            idcol="comb", fill=TRUE)
+pr.TFBlearner.full.subsets.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.TFBlearner.full.subsets.dhs$model <- "TFBlearner.full"
+saveRDS(pr.TFBlearner.full.subsets.dhs, file.path(params$outPath, "pr.TFBlearner.full.subsets.dhs.rds"))
+
+pr.TFBlearner.full.full <- rbindlist(pr.TFBlearner.full.full, 
+                                     idcol="comb", fill=TRUE)
+pr.TFBlearner.full.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.TFBlearner.full.full$model <- "TFBlearner.full"
+saveRDS(pr.TFBlearner.full.full, file.path(params$outPath, "pr.TFBlearner.full.full.rds"))
+
+pr.TFBlearner.full.subsets.full <- rbindlist(pr.TFBlearner.full.subsets.full, 
+                                             idcol="comb", fill=TRUE)
+pr.TFBlearner.full.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.TFBlearner.full.subsets.full$model <- "TFBlearner.full"
+saveRDS(pr.TFBlearner.full.subsets.full, file.path(params$outPath, "pr.TFBlearner.full.subsets.full.rds"))
+
+pr.TFBlearner.full.subsets.full.agg <- rbindlist(pr.TFBlearner.full.subsets.full.agg, 
+                                      idcol="comb", fill=TRUE)
+pr.TFBlearner.full.subsets.full.agg[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.TFBlearner.full.subsets.full.agg$model <- "TFBlearner.full"
+saveRDS(pr.TFBlearner.full.subsets.full.agg, 
+        file.path(params$outPath, "pr.TFBlearner.full.subsets.full.agg.rds"))
+
+pr.TFBlearner.full.full.agg <- rbindlist(pr.TFBlearner.full.full.agg, 
+                                         idcol="comb", fill=TRUE)
+pr.TFBlearner.full.full.agg[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.TFBlearner.full.full.agg$model <- "TFBlearner.full"
+saveRDS(pr.TFBlearner.full.full.agg, 
+        file.path(params$outPath, "pr.TFBlearner.full.full.agg.rds"))
+```
+
+```{r, performance BMO, eval=bmoExists}
 pr.BMO.dhs <- list()
 pr.BMO.basic.subsets.dhs <- list()
 
@@ -1669,13 +1722,10 @@ pr.BMO.extended.subsets.dhs <- list()
 pr.BMO.full <- list()
 pr.BMO.basic.subsets.full <- list()
 
-pr.BMO.extended.full <- list()
-pr.BMO.extended.subsets.full <- list()
-
 for(testComb in unique(testCombinations$comb)){
     tf <- unlist(tstrsplit(testComb, split="_", keep=1))
     context <- unlist(tstrsplit(testComb, split="_", keep=2))
-    predFile <- file.path(params$bmoPredDir,
+    predFile <- file.path(bmoPredDir,
                           paste(testComb, "all", "bed", sep="."))
     predDt <- fread(predFile, 
                     col.names=c("chr", "start", "end", 
@@ -1684,15 +1734,11 @@ for(testComb in unique(testCombinations$comb)){
                                 "cocc_neg_bin_p_val", "comb_pval", "adjusted_comb_pval", 
                                 "BMO_score", "is_bound"))
     predDt$comb <- testComb
-    mappedPreds1 <- genomicRangesMapping(dhsCoordsSub, 
-                                         predDt, 
-                                         scoreCol="BMO_score",
-                                         aggregationFun=max,
-                                         byCols="comb", 
-                                         type="within")
+    setnames(predDt, "BMO_score", "pred_score")
+    mappedPreds1 <- withinMappingScores(dhsCoordsSub, predDt)
     mappedPreds2 <- genomicRangesMapping(dhsCoordsSub, 
                                          predDt, 
-                                         scoreCol="BMO_score",
+                                         scoreCol="pred_score",
                                          aggregationFun=max,
                                          byCols="comb")
     predScore <- fifelse(mappedPreds1[,1,drop=TRUE]>0, 
@@ -1707,31 +1753,10 @@ for(testComb in unique(testCombinations$comb)){
     pr.BMO.basic.subsets.dhs[[testComb]] <- pr.stats.subsets
     pr.BMO.dhs[[testComb]] <- pr.stats
     
-    # map ATAC-data to zeroes
-    nfFrags <- nfOverlaps.dhs[[context]][,1,drop=TRUE]
-    nfFrags <- 200*nfFrags/pmax(200L, width(dhsCoordsSub))
-    minPScore <- min(predScore[which(predScore>0)])
-    minPScore <- minPScore/max(sqrt(nfFrags))
-    nfScore <- minPScore*sqrt(nfFrags)
-    predScore <- fifelse(predScore>0,
-                             predScore,
-                             nfScore)
-    mappedPredDt <- data.table(pred_score=predScore)
-    pr.stats <- compute.pr.all.sets(mappedPredDt, labelsDt)
-    pr.stats.subsets <- compute.subset.stats(mappedPredDt, labelsDt)
-  
-    pr.BMO.extended.dhs[[testComb]] <- pr.stats
-    pr.BMO.extended.subsets.dhs[[testComb]] <- pr.stats.subsets
-    
-    mappedPredsFull1 <- genomicRangesMapping(binRanges, 
-                                             predDt, 
-                                             scoreCol="BMO_score",
-                                             aggregationFun=max,
-                                             byCols="comb", 
-                                             type="within")
+    mappedPredsFull1 <- withinMappingScores(binRanges, predDt)
     mappedPredsFull2 <- genomicRangesMapping(binRanges, 
                                              predDt, 
-                                             scoreCol="BMO_score",
+                                             scoreCol="pred_score",
                                              aggregationFun=max,
                                              byCols="comb")
     predScoreFull <- fifelse(mappedPredsFull1[,1,drop=TRUE]>0, 
@@ -1745,22 +1770,6 @@ for(testComb in unique(testCombinations$comb)){
   
     pr.BMO.basic.subsets.full[[testComb]] <- pr.stats.subsets
     pr.BMO.full[[testComb]] <- pr.stats
-    
-    nfFrags <- nfOverlaps.full[[context]][,1,drop=TRUE]
-    minPScore <- min(predScoreFull[which(predScoreFull>0)])
-    minPScore <- minPScore/max(sqrt(nfFrags))
-    nfScore <- minPScore*sqrt(nfFrags)
-    predScoreFull <- fifelse(predScoreFull>0,
-                             predScoreFull,
-                             nfScore)
-    mappedPredFullDt <- data.table(pred_score=predScoreFull)
-  
-    labelsFullDt <- subset(labels.full, comb==testComb)
-    pr.stats <- compute.pr.all.sets(mappedPredFullDt, labelsFullDt)
-    pr.stats.subsets <- compute.subset.stats(mappedPredFullDt, labelsFullDt)
-
-    pr.BMO.extended.full[[testComb]] <- pr.stats
-    pr.BMO.extended.subsets.full[[testComb]] <- pr.stats.subsets
 }
 
 pr.BMO.dhs <- rbindlist(pr.BMO.dhs, idcol="comb", fill=TRUE)
@@ -1773,16 +1782,6 @@ pr.BMO.basic.subsets.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
 pr.BMO.basic.subsets.dhs$model <- "BMO"
 saveRDS(pr.BMO.basic.subsets.dhs, file.path(params$outPath, "pr.BMO.basic.subsets.dhs.rds"))
 
-pr.BMO.extended.dhs <- rbindlist(pr.BMO.extended.dhs, idcol="comb", fill=TRUE)
-pr.BMO.extended.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.BMO.extended.dhs$model <- "BMO.extended"
-saveRDS(pr.BMO.extended.dhs, file.path(params$outPath, "pr.BMO.extended.dhs.rds"))
-
-pr.BMO.extended.subsets.dhs <- rbindlist(pr.BMO.extended.subsets.dhs, idcol="comb", fill=TRUE)
-pr.BMO.extended.subsets.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.BMO.extended.subsets.dhs$model <- "BMO.extended"
-saveRDS(pr.BMO.extended.subsets.dhs, file.path(params$outPath, "pr.BMO.extended.subsets.dhs.rds"))
-
 pr.BMO.full <- rbindlist(pr.BMO.full, idcol="comb", fill=TRUE)
 pr.BMO.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
 pr.BMO.full$model <- "BMO"
@@ -1792,24 +1791,11 @@ pr.BMO.basic.subsets.full <- rbindlist(pr.BMO.basic.subsets.full, idcol="comb", 
 pr.BMO.basic.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
 pr.BMO.basic.subsets.full$model <- "BMO"
 saveRDS(pr.BMO.basic.subsets.full, file.path(params$outPath, "pr.BMO.basic.subsets.full.rds"))
-
-pr.BMO.extended.full <- rbindlist(pr.BMO.extended.full, idcol="comb", fill=TRUE)
-pr.BMO.extended.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.BMO.extended.full$model <- "BMO.extended"
-saveRDS(pr.BMO.extended.full, file.path(params$outPath, "pr.BMO.extended.full.rds"))
-
-pr.BMO.extended.subsets.full <- rbindlist(pr.BMO.extended.subsets.full, idcol="comb", fill=TRUE)
-pr.BMO.extended.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.BMO.extended.subsets.full$model <- "BMO.extended"
-saveRDS(pr.BMO.extended.subsets.full, file.path(params$outPath, "pr.BMO.extended.subsets.full.rds"))
 ```
 
-```{r, performance TOP DHS, eval=topExists}
+```{r, performance TOP, eval=topExists}
 pr.TOP.dhs <- list()
 pr.TOP.basic.subsets.dhs <- list()
-
-pr.TOP.extended.dhs <- list()
-pr.TOP.extended.subsets.dhs <- list()
 
 pr.TOP.full <- list()
 pr.TOP.basic.subsets.full <- list()
@@ -1819,22 +1805,17 @@ pr.TOP.extended.subsets.full <- list()
 
 for(testComb in unique(testCombinations$comb)){
     tf <- unlist(tstrsplit(testComb, split="_", keep=1))
-    predFile <- file.path(params$topPredDir,
-                          holdoutSet,
+    predFile <- file.path(topPredDir,
                           "logistic",
                           paste0("pred_", testComb, ".rds"))
     preds <- readRDS(predFile)
     predDt <- as.data.table(preds$predictions)
     predDt$comb <- testComb
-    mappedPreds1 <- genomicRangesMapping(dhsCoordsSub, 
-                                         predDt, 
-                                         scoreCol="predicted",
-                                         aggregationFun=max,
-                                         byCols="comb", 
-                                         type="within")
+    setnames(predDt, "predicted", "pred_score")
+    mappedPreds1 <- withinMappingScores(dhsCoordsSub, predDt)
     mappedPreds2 <- genomicRangesMapping(dhsCoordsSub, 
                                          predDt, 
-                                         scoreCol="predicted",
+                                         scoreCol="pred_score",
                                          aggregationFun=max,
                                          byCols="comb")
     predScore <- fifelse(mappedPreds1[,1,drop=TRUE]>0, 
@@ -1849,31 +1830,10 @@ for(testComb in unique(testCombinations$comb)){
     pr.TOP.basic.subsets.dhs[[testComb]] <- pr.stats.subsets
     pr.TOP.dhs[[testComb]] <- pr.stats
     
-    # map ATAC-data to zeroes
-    nfFrags <- nfOverlaps.dhs[[context]][,1,drop=TRUE]
-    nfFrags <- 200*nfFrags/pmax(200L, width(dhsCoordsSub))
-    minPScore <- min(predScore[which(predScore>0)])
-    minPScore <- minPScore/max(sqrt(nfFrags))
-    nfScore <- minPScore*sqrt(nfFrags)
-    predScore <- fifelse(predScore>0,
-                             predScore,
-                             nfScore)
-    mappedPredDt <- data.table(pred_score=predScore)
-    pr.stats <- compute.pr.all.sets(mappedPredDt, labelsDt)
-    pr.stats.subsets <- compute.subset.stats(mappedPredDt, labelsDt)
-  
-    pr.TOP.extended.dhs[[testComb]] <- pr.stats
-    pr.TOP.extended.subsets.dhs[[testComb]] <- pr.stats.subsets
-    
-    mappedPredsFull1 <- genomicRangesMapping(binRanges, 
-                                             predDt, 
-                                             scoreCol="predicted",
-                                             aggregationFun=max,
-                                             byCols="comb", 
-                                             type="within")
+    mappedPredsFull1 <- withinMappingScores(binRanges, predDt)
     mappedPredsFull2 <- genomicRangesMapping(binRanges, 
                                              predDt, 
-                                             scoreCol="predicted",
+                                             scoreCol="pred_score",
                                              aggregationFun=max,
                                              byCols="comb")
     predScoreFull <- fifelse(mappedPredsFull1[,1,drop=TRUE]>0, 
@@ -1887,22 +1847,6 @@ for(testComb in unique(testCombinations$comb)){
   
     pr.TOP.basic.subsets.full[[testComb]] <- pr.stats.subsets
     pr.TOP.full[[testComb]] <- pr.stats
-    
-    nfFrags <- nfOverlaps.full[[context]][,1,drop=TRUE]
-    minPScore <- min(predScoreFull[which(predScoreFull>0)])
-    minPScore <- minPScore/max(sqrt(nfFrags))
-    nfScore <- minPScore*sqrt(nfFrags)
-    predScoreFull <- fifelse(predScoreFull>0,
-                             predScoreFull,
-                             nfScore)
-    mappedPredFullDt <- data.table(pred_score=predScoreFull)
-  
-    labelsFullDt <- subset(labels.full, comb==testComb)
-    pr.stats <- compute.pr.all.sets(mappedPredFullDt, labelsFullDt)
-    pr.stats.subsets <- compute.subset.stats(mappedPredFullDt, labelsFullDt)
-
-    pr.TOP.extended.full[[testComb]] <- pr.stats
-    pr.TOP.extended.subsets.full[[testComb]] <- pr.stats.subsets
 }
 pr.TOP.dhs <- rbindlist(pr.TOP.dhs, idcol="comb", fill=TRUE)
 pr.TOP.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
@@ -1914,16 +1858,6 @@ pr.TOP.basic.subsets.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
 pr.TOP.basic.subsets.dhs$model <- "TOP"
 saveRDS(pr.TOP.basic.subsets.dhs, file.path(params$outPath, "pr.TOP.basic.subsets.dhs.rds"))
 
-pr.TOP.extended.dhs <- rbindlist(pr.TOP.extended.dhs, idcol="comb", fill=TRUE)
-pr.TOP.extended.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TOP.extended.dhs$model <- "TOP.extended"
-saveRDS(pr.TOP.extended.dhs, file.path(params$outPath, "pr.TOP.extended.dhs.rds"))
-
-pr.TOP.extended.subsets.dhs <- rbindlist(pr.TOP.extended.subsets.dhs, idcol="comb", fill=TRUE)
-pr.TOP.extended.subsets.dhs[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TOP.extended.subsets.dhs$model <- "TOP.extended"
-saveRDS(pr.TOP.extended.subsets.dhs, file.path(params$outPath, "pr.TOP.extended.subsets.dhs.rds"))
-
 pr.TOP.full <- rbindlist(pr.TOP.full, idcol="comb", fill=TRUE)
 pr.TOP.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
 pr.TOP.full$model <- "TOP"
@@ -1933,16 +1867,6 @@ pr.TOP.basic.subsets.full <- rbindlist(pr.TOP.basic.subsets.full, idcol="comb", 
 pr.TOP.basic.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
 pr.TOP.basic.subsets.full$model <- "TOP"
 saveRDS(pr.TOP.basic.subsets.full, file.path(params$outPath, "pr.TOP.basic.subsets.full.rds"))
-
-pr.TOP.extended.full <- rbindlist(pr.TOP.extended.full, idcol="comb", fill=TRUE)
-pr.TOP.extended.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TOP.extended.full$model <- "TOP.extended"
-saveRDS(pr.TOP.extended.full, file.path(params$outPath, "pr.TOP.extended.full.rds"))
-
-pr.TOP.extended.subsets.full <- rbindlist(pr.TOP.extended.subsets.full, idcol="comb", fill=TRUE)
-pr.TOP.extended.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
-pr.TOP.extended.subsets.full$model <- "TOP.extended"
-saveRDS(pr.TOP.extended.subsets.full, file.path(params$outPath, "pr.TOP.extended.subsets.full.rds"))
 ```
 
 ```{r, performance maxATAC, eval=maxatac20Exists}
@@ -1952,12 +1876,14 @@ pr.maxATAC.default.subsets.dhs <- list()
 pr.maxATAC.default.full <- list()
 pr.maxATAC.default.subsets.full <- list()
 
+pr.maxATAC.default.subsets.full.agg <- list()
+pr.maxATAC.default.full.agg <- list()
+
 for(testComb in unique(testCombinations$comb)){
   tf <- unlist(tstrsplit(testComb, split="_", keep=1))
   context <- unlist(tstrsplit(testComb, split="_", keep=2))
   
-  predFile <- file.path(params$maxAtacPredDir,
-                        holdoutSet, 
+  predFile <- file.path(maxatacDir,
                         "20/dhs", tf, paste0(context, "_pred", ".bw"))
   
   if(!file.exists(predFile)) next
@@ -1965,13 +1891,8 @@ for(testComb in unique(testCombinations$comb)){
   predDt <- as.data.table(preds)
   setnames(predDt, "score", "pred_score")
   predDt$comb <- testComb
-  
-  mappedPreds1 <- genomicRangesMapping(dhsCoordsSub, 
-                                       predDt, 
-                                       scoreCol="pred_score",
-                                       aggregationFun=max,
-                                       byCols="comb", 
-                                       type="within")
+
+  mappedPreds1 <- withinMappingScores(dhsCoordsSub, predDt)
   mappedPreds2 <- genomicRangesMapping(dhsCoordsSub, 
                                        predDt, 
                                        scoreCol="pred_score",
@@ -1982,19 +1903,13 @@ for(testComb in unique(testCombinations$comb)){
                        mappedPreds2[,1,drop=TRUE])
   mappedPredDt <- data.table(pred_score=predScore)
   labelsDt <- subset(labels.dhs, comb==testComb)
-  pr.stats <- compute.pr.all.sets(mappedPredDt, 
-                                  labelsDt)
+  pr.stats <- compute.pr.all.sets(mappedPredDt, labelsDt)
   pr.stats.subsets <- compute.subset.stats(mappedPredDt, labelsDt)
   
   pr.maxATAC.default.subsets.dhs[[testComb]] <- pr.stats.subsets
   pr.maxATAC.default.dhs[[testComb]] <- pr.stats
   
-  mappedPredsFull1 <- genomicRangesMapping(binRanges, 
-                                           predDt, 
-                                           scoreCol="pred_score",
-                                           aggregationFun=max,
-                                           byCols="comb", 
-                                           type="within")
+  mappedPredsFull1 <- withinMappingScores(binRanges, predDt)
   mappedPredsFull2 <- genomicRangesMapping(binRanges, 
                                            predDt, 
                                            scoreCol="pred_score",
@@ -2010,6 +1925,36 @@ for(testComb in unique(testCombinations$comb)){
   
   pr.maxATAC.default.subsets.full[[testComb]] <- pr.stats.subsets
   pr.maxATAC.default.full[[testComb]] <- pr.stats
+  
+  # aggregated by DHS ----------------------------------------------------------
+  
+  predDt$tf <- tf
+  predRanges <- makeGRangesFromDataFrame(as.data.frame(predDt))
+  binDiffRanges <- subsetByOverlaps(binRanges, dhsCoordsSub, invert=TRUE)
+  whichDiff <- which(overlapsAny(binRanges, binDiffRanges))
+  
+  mappedPredsFull1 <- withinMappingScores(binDiffRanges, predDt)
+  mappedPredsFull2 <- genomicRangesMapping(binDiffRanges, 
+                                           predDt, 
+                                           scoreCol="pred_score",
+                                           aggregationFun=max,
+                                           byCols="tf", type="any")
+  predScoreFull <- fifelse(mappedPredsFull1[,1,drop=TRUE]>0, 
+                           mappedPredsFull1[,1,drop=TRUE],
+                           mappedPredsFull2[,1,drop=TRUE])
+  mappedPredFullDt <- data.table(pred_score=predScoreFull)
+  
+  labelsFullDt <- subset(labels.full, comb==testComb)[whichDiff,]
+  labelsDhsDt <- subset(labels.dhs, comb==testComb)
+  labelsAllDt <- rbind(labelsFullDt, labelsDhsDt, fill=TRUE, use.names=TRUE)
+  mappedPredAllDt <- rbind(mappedPredFullDt, mappedPredDt[,"pred_score", with=FALSE], 
+                           fill=TRUE, use.names=TRUE)
+  
+  pr.stats <- compute.pr.all.sets(mappedPredAllDt, labelsAllDt)
+  pr.stats.subsets <- compute.subset.stats(mappedPredAllDt, labelsAllDt)
+  
+  pr.maxATAC.default.subsets.full.agg[[testComb]] <- pr.stats.subsets
+  pr.maxATAC.default.full.agg[[testComb]] <- pr.stats
 }
 
 pr.maxATAC.default.dhs <- rbindlist(pr.maxATAC.default.dhs, idcol="comb", fill=TRUE)
@@ -2031,6 +1976,20 @@ pr.maxATAC.default.subsets.full <- rbindlist(pr.maxATAC.default.subsets.full, id
 pr.maxATAC.default.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
 pr.maxATAC.default.subsets.full$model <- "maxATAC.default"
 saveRDS(pr.maxATAC.default.subsets.full, file.path(params$outPath, "pr.maxATAC.default.subsets.full.rds"))
+
+pr.maxATAC.default.subsets.full.agg <- rbindlist(pr.maxATAC.default.subsets.full.agg, 
+                                      idcol="comb", fill=TRUE)
+pr.maxATAC.default.subsets.full.agg[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.maxATAC.default.subsets.full.agg$model <- "maxATAC.default"
+saveRDS(pr.maxATAC.default.subsets.full.agg, 
+        file.path(params$outPath, "pr.maxATAC.default.subsets.full.agg.rds"))
+
+pr.maxATAC.default.full.agg <- rbindlist(pr.maxATAC.default.full.agg, 
+                                         idcol="comb", fill=TRUE)
+pr.maxATAC.default.full.agg[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.maxATAC.default.full.agg$model <- "maxATAC.default"
+saveRDS(pr.maxATAC.default.full.agg, 
+        file.path(params$outPath, "pr.maxATAC.default.full.agg.rds"))
 ```
 
 
@@ -2041,12 +2000,14 @@ pr.maxATAC.100.subsets.dhs <- list()
 pr.maxATAC.100.full <- list()
 pr.maxATAC.100.subsets.full <- list()
 
+pr.maxATAC.100.subsets.full.agg <- list()
+pr.maxATAC.100.full.agg <- list()
+
 for(testComb in unique(testCombinations$comb)){
   tf <- unlist(tstrsplit(testComb, split="_", keep=1))
   context <- unlist(tstrsplit(testComb, split="_", keep=2))
   
-  predFile <- file.path(params$maxAtacPredDir,
-                        holdoutSet, 
+  predFile <- file.path(maxatacDir,
                         "100/dhs", tf, paste0(context, "_pred", ".bw"))
   
   if(!file.exists(predFile)) next
@@ -2055,12 +2016,7 @@ for(testComb in unique(testCombinations$comb)){
   setnames(predDt, "score", "pred_score")
   predDt$comb <- testComb
   
-  mappedPreds1 <- genomicRangesMapping(dhsCoordsSub, 
-                                       predDt, 
-                                       scoreCol="pred_score",
-                                       aggregationFun=max,
-                                       byCols="comb", 
-                                       type="within")
+  mappedPreds1 <- withinMappingScores(dhsCoordsSub, predDt)
   mappedPreds2 <- genomicRangesMapping(dhsCoordsSub, 
                                        predDt, 
                                        scoreCol="pred_score",
@@ -2079,12 +2035,7 @@ for(testComb in unique(testCombinations$comb)){
   pr.maxATAC.100.subsets.dhs[[testComb]] <- pr.stats.subsets
   pr.maxATAC.100.dhs[[testComb]] <- pr.stats
   
-  mappedPredsFull1 <- genomicRangesMapping(binRanges, 
-                                           predDt, 
-                                           scoreCol="pred_score",
-                                           aggregationFun=max,
-                                           byCols="comb", 
-                                           type="within")
+  mappedPredsFull1 <- withinMappingScores(binRanges, predDt)
   mappedPredsFull2 <- genomicRangesMapping(binRanges, 
                                            predDt, 
                                            scoreCol="pred_score",
@@ -2101,6 +2052,36 @@ for(testComb in unique(testCombinations$comb)){
   
   pr.maxATAC.100.subsets.full[[testComb]] <- pr.stats.subsets
   pr.maxATAC.100.full[[testComb]] <- pr.stats
+  
+  # aggregated by DHS ----------------------------------------------------------
+  
+  predDt$tf <- tf
+  predRanges <- makeGRangesFromDataFrame(as.data.frame(predDt))
+  binDiffRanges <- subsetByOverlaps(binRanges, dhsCoordsSub, invert=TRUE)
+  whichDiff <- which(overlapsAny(binRanges, binDiffRanges))
+  
+  mappedPredsFull1 <- withinMappingScores(binDiffRanges, predDt)
+  mappedPredsFull2 <- genomicRangesMapping(binDiffRanges, 
+                                           predDt, 
+                                           scoreCol="pred_score",
+                                           aggregationFun=max,
+                                           byCols="tf", type="any")
+  predScoreFull <- fifelse(mappedPredsFull1[,1,drop=TRUE]>0, 
+                           mappedPredsFull1[,1,drop=TRUE],
+                           mappedPredsFull2[,1,drop=TRUE])
+  mappedPredFullDt <- data.table(pred_score=predScoreFull)
+  
+  labelsFullDt <- subset(labels.full, comb==testComb)[whichDiff,]
+  labelsDhsDt <- subset(labels.dhs, comb==testComb)
+  labelsAllDt <- rbind(labelsFullDt, labelsDhsDt, fill=TRUE, use.names=TRUE)
+  mappedPredAllDt <- rbind(mappedPredFullDt, mappedPredDt[,"pred_score", with=FALSE], 
+                           fill=TRUE, use.names=TRUE)
+  
+  pr.stats <- compute.pr.all.sets(mappedPredAllDt, labelsAllDt)
+  pr.stats.subsets <- compute.subset.stats(mappedPredAllDt, labelsAllDt)
+  
+  pr.maxATAC.100.subsets.full.agg[[testComb]] <- pr.stats.subsets
+  pr.maxATAC.100.full.agg[[testComb]] <- pr.stats
 }
 
 pr.maxATAC.100.dhs <- rbindlist(pr.maxATAC.100.dhs, idcol="comb", fill=TRUE)
@@ -2122,6 +2103,20 @@ pr.maxATAC.100.subsets.full <- rbindlist(pr.maxATAC.100.subsets.full, idcol="com
 pr.maxATAC.100.subsets.full[,c("tf", "context"):=tstrsplit(comb, split="_")]
 pr.maxATAC.100.subsets.full$model <- "maxATAC.100"
 saveRDS(pr.maxATAC.100.subsets.full, file.path(params$outPath, "pr.maxATAC.100.subsets.full.rds"))
+
+pr.maxATAC.100.subsets.full.agg <- rbindlist(pr.maxATAC.100.subsets.full.agg, 
+                                      idcol="comb", fill=TRUE)
+pr.maxATAC.100.subsets.full.agg[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.maxATAC.100.subsets.full.agg$model <- "maxATAC.100"
+saveRDS(pr.maxATAC.100.subsets.full.agg, 
+        file.path(params$outPath, "pr.maxATAC.100.subsets.full.agg.rds"))
+
+pr.maxATAC.100.full.agg <- rbindlist(pr.maxATAC.100.full.agg, 
+                                     idcol="comb", fill=TRUE)
+pr.maxATAC.100.full.agg[,c("tf", "context"):=tstrsplit(comb, split="_")]
+pr.maxATAC.100.full.agg$model <- "maxATAC.100"
+saveRDS(pr.maxATAC.100.full.agg, 
+        file.path(params$outPath, "pr.maxATAC.100.full.agg.rds"))
 ```
 
 ```{r, sessionInfo}
