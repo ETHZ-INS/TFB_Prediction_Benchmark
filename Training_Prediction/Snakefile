@@ -653,7 +653,7 @@ rule Common_get_matches_genome:
   params:
     script=prefix_path("src/FIMO/01_motif_matches.Rmd"),
     motif_models=f"{ANNOTATION_DIR}/motif_models.rds",
-    refPath=f"{ANNOTATION_DIR}/Homo_sapiens.GRCh38.dna.primary_assembly.fa",
+    refPath=f"{ANNOTATION_DIR}/Homo_sapiens.GRCh38.dna.primary_assembly.autosomes.chr.fa",
     dhsPath=f"{ANNOTATION_DIR}/dhs.bed",
     tfsSub=TFSUB,
     fimo_out_dir=prefix_path("output/FIMO"),
@@ -689,7 +689,7 @@ rule Common_get_matches_dhs:
   params:
     script=prefix_path("src/FIMO/01_motif_matches.Rmd"),
     motif_models=f"{ANNOTATION_DIR}/motif_models.rds",
-    refPath=f"{ANNOTATION_DIR}/Homo_sapiens.GRCh38.dna.primary_assembly.fa",
+    refPath=f"{ANNOTATION_DIR}/Homo_sapiens.GRCh38.dna.primary_assembly.autosomes.chr.fa",
     dhsPath=f"{ANNOTATION_DIR}/dhs.bed",
     tfsSub=TFSUB,
     fimo_out_dir=prefix_path("output/FIMO"),
