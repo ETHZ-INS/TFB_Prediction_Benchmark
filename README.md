@@ -32,9 +32,10 @@ Further following files need to be available in `data/annotation/` before runnin
   *Downloaded from: https://mitra.stanford.edu/kundaje/akundaje/release/blacklists/hg38-human/hg38.blacklist.bed.gz*
 - Extended blacklisted regions set:  **`blacklist_extended.bed`**    
   *Downloaded from: https://github.com/MiraldiLab/maxATAC_data/blob/main/hg38/hg38_maxatac_blacklist.bed. 
-   These were used for the final evaluation of all methods, by removing all overlapping regions from computing performance metrics.*
-- TruSeq adapters: **`truseqPE.fa`**      
-  *Downloaded from: https://github.com/timflutre/trimmomatic/blob/master/adapters/TruSeq2-PE.fa*
+   These were used for the final evaluation of all methods, by removing all overlapping regions from computing performance metrics.*    
+
+
+The [`TruSeq adapters`](./data/annotation/truseqPE.fa) were downloaded from: https://github.com/timflutre/trimmomatic/blob/master/adapters/TruSeq2-PE.fa and extended by the transposase entries.
 
 ### 2. Singularity Images
 
