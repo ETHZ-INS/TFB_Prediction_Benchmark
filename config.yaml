@@ -1,0 +1,23 @@
+project: TF Binding Prediction Benchmark
+
+global:
+  seed: 43
+  # either train or test, if train, all test data is removed 
+  # and two training cellular contexts (HepG2 and MCF-7 are heldout)
+  holdout: test
+  annotation_dir: "data/annotation"
+
+Training_Prediction:
+  methods:
+    - BMO
+    - maxATAC
+    - TFBlearner
+    - TFBlearner.addSupport
+    - TOP
+    
+  # if null all preregistered TFs are used
+  subset_tfs: 
+  maxatac_epochs: 100
+  
+Comparison:
+  plots: "all"
