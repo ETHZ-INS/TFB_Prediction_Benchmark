@@ -35,7 +35,7 @@ Further following files need to be available in `data/annotation/` before runnin
    These were used for the final evaluation of all methods, by removing all overlapping regions from computing performance metrics.*    
 
 
-The [TruSeq adapters](./data/annotation/truseqPE.fa) were downloaded from: https://github.com/timflutre/trimmomatic/blob/master/adapters/TruSeq2-PE.fa and extended by the transposase entries.
+The [TruSeq adapters](./data/annotation/truseqPE.fa) in `data/annotation/` were downloaded from: https://github.com/timflutre/trimmomatic/blob/master/adapters/TruSeq2-PE.fa and extended by the transposase entries.
 
 ### 2. Singularity Images
 
