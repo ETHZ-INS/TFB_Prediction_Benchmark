@@ -411,7 +411,7 @@ ggsave(file.path(outPlotDir, "supplementary_peak_sets.pdf"),
 ```
 
 
-```{r}
+```{r, fig.width=16, fig.height=7}
 pr.dhs.subsets <- list.files(metricsDir, pattern="*subsets.*.rds", 
                              full.names=TRUE)
 pr.dhs.subsets <- pr.dhs.subsets[!grepl(".extended", pr.dhs.subsets, fixed=TRUE) & 
@@ -432,141 +432,122 @@ pr.ag2.dhs[,model:=factor(model, levels=unique(pr.ag2.dhs$model), ordered=TRUE)]
 pr.ag2.dhs[,color_flag:=fifelse(FCE>mean(pr.ag2.dhs$FCE), TRUE, FALSE)]
 
 library(dplyr)
-x2 <- recode(pr.ag2.dhs$set, 
-             p2.4.n1.3="All", 
-             p2.n1.3="Only test pos.", 
-             p4.n1.3="Both pos.",
-             p2.n1="Only test pos. & both neg.",
-             p4.n1="Both pos. & both neg.",
-             p2.4.n1="Test pos. & both neg.",
-             p2.n3="Setdiff pos. & neg.",
-             p4.n3="Pos in both vs all train pos",
-             p2.4.n3="Pos in test vs all train pos")
-pr.ag2.dhs[,set:=factor(x2, levels=c("All", 
-                                            "Only test pos.", 
-                                            "Both pos.", 
-                                            "Only test pos. & both neg.",
-                                            "Both pos. & both neg.",
-                                            "Test pos. & both neg.",
-                                            "Setdiff pos. & neg.",
-                                            "Pos in both vs all train pos",
-                                            "Pos in test vs all train pos"), 
-                               ordered=TRUE)]
-pr.ag2.dhs[,set_type_neg:=fifelse(set %in% c("All", 
-                                             "Only test pos.", 
-                                             "Both pos."), 
-                              "All test", "Only test")]
-pr.ag2.dhs[,set_type_neg:=fifelse(set %in% c("Only test pos. & both neg.",
-                                              "Both pos. & both neg.", 
-                                              "Test pos. & both neg."), 
-                              "Only in both", set_type_neg)]
-pr.ag2.dhs[,set_pos:=fifelse(set %in% c("Only test pos.", 
-                                        "Only test pos. & both neg.", 
-                                        "Setdiff pos. & neg."), 
-                             "Only test", "Only in both")]
-pr.ag2.dhs[,set_pos:=fifelse(set %in% c("All", 
-                                        "Test pos. & both neg.",
-                                        "Pos in test vs all train pos"), 
-                             "All test", set_pos)]
 
-annotSet <- unique(pr.ag2.dhs[,c("set_type_neg", 
-                                 "set_pos"), with=FALSE], 
-                   by=c("set_type_neg", "set_pos"))
+conversion <- c(
+   p2.4.n1.3="All (distinguish\npositives\nfrom negatives)", 
+   p4.n1.3="Distinguish\nshared positives\nfrom negatives", 
+   p2.n1.3="Distinguish\nunseen positives\nfrom negatives",
+   p2.4.n1="Distinguish\ntest positives\nfrom shared negatives",
+   p4.n1="Distinguish\nshared positives\nfrom shared negatives",
+   p2.n1="Distinguish\nunseen positives\nfrom shared negatives",
+   p2.4.n3="Distinguish\ntest positives\nfrom train positives",
+   p4.n3="Distinguish shared\npositives from positives\nonly in train",
+   p2.n3="Distinguish unseen\npositives from positives\nonly in train"
+   )
+pr.ag2.dhs$set2 <- factor(conversion[as.character(pr.ag2.dhs$set)], conversion)
+sets_included <- sapply(setNames(1:4,paste0(c("n","p","n","p"),1:4)), \(x){ grepl(x, pr.ag2.dhs$set)})
+d <- cbind(pr.ag2.dhs, as.data.frame(sets_included))
 
-annotSet[,`Positive set 1`:=fifelse(set_pos=="All test" | set_pos=="Only test", 
-                                    "Peak only in test", NA)]
-annotSet[,`Positive set 2`:=fifelse(set_pos=="Only test", 
-                                    NA, "Peak in train and test")]
-annotSet[,`Negative set 1`:=fifelse(set_type_neg=="All test" | set_type_neg=="Only in both", 
-                                    "Peak in neither", NA)]
-annotSet[,`Negative set 2`:=fifelse(set_type_neg!="Only in both", "Peak only in train", NA)]
-annotSet2 <- melt(annotSet, id.vars=c("set_type_neg", "set_pos"), 
-                  variable.name="model", value.name="set")
+dul <- melt(unique(d[, c("set2", "n1", "n3", "p2", "p4")]), 
+            id.vars = "set2", variable.name = "set_flag")
 
-annotSet2$model <- factor(annotSet2$model, levels = c("Positive set 1",
-                                                      "Positive set 2",
-                                                      "Negative set 1",
-                                                      "Negative set 2",
-                                                      levels(pr.ag2.dhs$model)))
-pr.ag2.dhs[,set_pos:=factor(set_pos, 
-                             levels=unique(pr.ag2.dhs$set_pos), 
-                             ordered=TRUE)]
-lvl_pos <- c("All test", "Only in both", "Only test")
-pr.ag2.dhs[, set_pos := factor(set_pos, levels = lvl_pos, ordered=TRUE)]
-annotSet2[, set_pos := factor(set_pos, levels = lvl_pos, ordered=TRUE)]
- 
-pr.ag2.dhs[,set_type_neg:=factor(set_type_neg, 
-                                 levels=unique(pr.ag2.dhs$set_type_neg),
-                                 ordered=TRUE)]
-lvl_neg <- levels(pr.ag2.dhs$set_type_neg)
-pr.ag2.dhs[, set_type_neg := factor(set_type_neg, levels = lvl_neg, ordered=TRUE)]
-annotSet2[, set_type_neg := factor(set_type_neg, levels = lvl_neg, ordered=TRUE)]
+dul2 <- group_by(mutate(dul[which(dul$value),],
+  target = ifelse(set_flag %in% c("p2", "p4"), "Positives", "Negatives"),
+  y_center = ifelse(target == "Positives", 1, 2)
+), set2, target)
 
-pr.ag2.dhs$type <- "Models"
-annotSet2$type <- "Set"
-colorsSets <- cbbPalette[2:5]
-names(colorsSets) <- c("Peak in train and test", "Peak only in train",
-                       "Peak only in test", "Peak in neither")
+annotSet <- ungroup(mutate(
+  dul2,
+  n_sets = n(),
+  set_idx = row_number(),
+  tile_height = 0.85 / n_sets,
+  y_mid = (y_center - 0.425) + (set_idx - 0.5) * tile_height
+))
 
-p.hp.sets <- ggplot(pr.ag2.dhs, aes(y=model, x=set_pos, fill=FCE))+
-  geom_tile()+
-  ggh4x::facet_nested(type~ "Set of negatives" + set_type_neg, 
-                      scales="free_y", space="free")+
-  labs(fill="Median enrichment\n over random", y="", tags="B", x="Peak sets used")+
-  geom_text(aes(label=round(FCE, 3), colour=color_flag), size=4)+
+colorsSets <- setNames(cbbPalette[2:5], levels(annotSet$set_flag))
+
+ptheme <-   theme(
+  panel.spacing = unit(2, "pt"),
+  panel.spacing.y = grid::unit(2, "pt"),
+  axis.text.x=element_blank(),
+  strip.text.x= element_blank(),
+  strip.text.y= element_text(size=14),
+  axis.title.x=element_text(size=14),
+  axis.text.y=element_text(size=12), 
+  legend.title=element_text(size=12), 
+  legend.text=element_text(size=12), 
+  panel.grid = element_blank(),
+  panel.grid.major = element_blank(),
+  axis.title.y=element_text(size=12),
+  plot.tag=element_text(size=20))
+
+dround <- function(x, digits=2){
+  w <- which(abs(x) < 1)
+  e <- ceiling(-log10(abs(x[w])))
+  x[w] <- round(10^e * x[w], digits - 1)/10^e
+  w <- which(abs(x)>=1)
+  x[w] <- round(x[w],pmax(0,digits-pmax(0,floor(log10(x[w])))))
+  x
+}
+pr.ag2.dhs$rounded <- dround(pr.ag2.dhs$FCE)
+
+pTop <- ggplot(pr.ag2.dhs, aes(y = model, x = set2, fill = FCE)) +
+  geom_tile(width = 0.9) +
+  geom_text(aes(label = rounded, colour = color_flag), size = 3.5) +
   scale_colour_manual(values = c("white", "black"), guide = "none") +
-  scale_fill_viridis(option="B",trans = "log",
-                       breaks = scales::log_breaks(),
-                       labels = scales::label_number())+
-  scale_x_discrete(guide = guide_axis(n.dodge=2))+
-  ggnewscale::new_scale_fill()+
-  geom_tile(data = annotSet2, aes(x=set_pos, y=model, fill=set, alpha=set), 
-            inherit.aes=FALSE) +
-  scale_fill_manual(values = colorsSets, name = "Sets", na.translate = FALSE, 
-                    guide="none")+
-  scale_alpha_manual(values=c("1"=1, "2"=1,"3"=1,"4"=1),
-                     guide = "none")+
-  theme_sleek()+
-  theme(panel.spacing = unit(2, "pt"),
-        panel.spacing.y = grid::unit(2, "pt"),
-        axis.text.x=element_blank(),
-        strip.text.x= element_blank(),
-        strip.text.y= element_text(size=14),
-        axis.title.x=element_text(size=14),
-        axis.text.y=element_text(size=12), 
-        legend.title=element_text(size=12), 
-        legend.text=element_text(size=12), 
-        plot.tag=element_text(size=20))
-p.hp.sets
+  scale_fill_viridis(option = "B", trans = "log",
+                     breaks = scales::log_breaks(),
+                     labels = scales::label_number(accuracy = 1),
+                     name = "Median\nenrichment\nover random") +
+  labs(y = "Methods", x = NULL, tag = "B") +
+  theme_sleek() + theme(legend.position = "right") + ptheme
 
-annotSub <- data.table(Set=c("Peak in neither", 
-                             "Peak only in test", 
-                             "Peak only in train", "Peak in\ntrain and test"), 
-                       `Peak in train`=c(FALSE, FALSE, TRUE, TRUE), 
-                       `Peak in test`=c(FALSE, TRUE, FALSE, TRUE))
-annotSub[,Set:=factor(Set, levels=c("Peak in\ntrain and test", "Peak only in train",
-                                    "Peak only in test", "Peak in neither"), 
-                      ordered=TRUE)]
-names(colorsSets) <- c("Peak in\ntrain and test", "Peak only in train",
-                       "Peak only in test", "Peak in neither")
+pBottom <- ggplot(annotSet) +
+  geom_tile(
+    aes(x = set2, y = y_mid, height = tile_height, fill = set_flag), 
+    width = 0.9
+  ) +
+  scale_fill_manual(values = colorsSets, name = "Sets", guide="none") +
+  scale_y_continuous(
+    breaks = c(1, 2), 
+    labels = c("Positives", "Negatives")
+  ) +
+  labs(x = NULL, y = "Peaks used") +
+  theme_sleek() + ptheme +
+  theme(
+    axis.text.x=element_text(angle = 90, vjust = 0.5, hjust=1, size=13),
+    strip.text = element_blank(),
+    strip.background = element_blank(),
+    panel.spacing = unit(0.2, "lines")
+  )
+
+p.hp.sets <- pTop / pBottom + plot_layout(heights = c(4, 1)) 
+
+peakSets <- c("n1"="Peak in\nneither", "n3"="Peak only\nin train",
+              "p4"="Peak in train\nand test", p2="Peak only\nin test")
+annotSub <- data.table(Set=peakSets[names(colorsSets)], 
+                        `Peak in train`=names(colorsSets) %in% c("n3","p4"), 
+                        `Peak in test`=names(colorsSets) %in% c("p2","p4"))
 p.scheme.sets <- ggplot(annotSub, aes(x=`Peak in test`, 
-                                      y=`Peak in train`, fill=Set))+
-            geom_tile()+
-            geom_text(aes(label=Set), size=4)+
-            labs(tag="A")+
-            scale_fill_manual(values=colorsSets)+
-            theme_sleek()+
-            theme(aspect.ratio = 1,
-                  axis.title.x=element_text(size=12),
-                  axis.title.y=element_text(size=12),
-                  axis.text.x=element_text(size=12),
-                  axis.text.y=element_text(size=12), 
-                  legend.title=element_text(size=12), 
-                  legend.text=element_text(size=12), 
-                  plot.tag=element_text(size=20))
-p.scheme.sets
+                                     y=`Peak in train`, fill=Set))+
+           geom_tile()+
+           geom_text(aes(label=Set), size=4)+
+           labs(tag="A")+
+           scale_fill_manual(values=setNames(colorsSets, annotSub$Set))+
+           theme_sleek()+
+           theme(aspect.ratio = 1, legend.position = "none",
+                 axis.title.x=element_text(size=12),
+                 axis.title.y=element_text(size=12),
+                 axis.text.x=element_text(size=12),
+                 axis.text.y=element_text(size=12), 
+                 legend.title=element_text(size=12), 
+                 legend.text=element_text(size=12), 
+                 plot.tag=element_text(size=20),
+                 panel.grid.major = element_blank())
 p.scheme.sets + p.hp.sets + plot_layout(widths=c(1,2))
 ```
+
+
 
 ```{r}
 labels.dhs <- readRDS(file.path(metricsDir, "labels.dhs.rds"))
